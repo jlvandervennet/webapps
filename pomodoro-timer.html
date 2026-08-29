@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Pomodoro Timer</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;user-select:none;-webkit-user-select:none}
+.timer{font-size:5rem;font-weight:200;font-variant-numeric:tabular-nums;color:#f0f6fc;margin-bottom:8px;letter-spacing:-1px}
+.label{font-size:.9rem;color:#8b949e;margin-bottom:32px;text-transform:uppercase;letter-spacing:2px}
+.controls{display:flex;gap:12px;margin-bottom:40px}
+.btn{padding:14px 28px;border:none;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}
+.btn:active{opacity:.7;transform:scale(0.97);transition:transform 0.1s}
+.btn-start{background:#238636;color:#fff}
+.btn-pause{background:#d29922;color:#000}
+.btn-reset{background:#30363d;color:#c9d1d9}
+.modes{display:flex;gap:8px;margin-bottom:24px}
+.mode{padding:8px 18px;border:1px solid #30363d;border-radius:20px;font-size:.85rem;cursor:pointer;background:transparent;color:#8b949e;font-family:inherit;-webkit-tap-highlight-color:transparent}
+.mode.active{border-color:#58a6ff;color:#58a6ff;background:rgba(88,166,255,.1)}
+.sessions{font-size:.8rem;color:#484f58}
+</style>
+</head>
+<body>
+
+<div class="modes">
+  <button class="mode active" data-min="25" data-label="Focus">Focus</button>
+  <button class="mode" data-min="5" data-label="Short Break">Break</button>
+  <button class="mode" data-min="15" data-label="Long Break">Long</button>
+</div>
+
+<div class="timer" id="timer">25:00</div>
+<div class="label" id="label">FOCUS</div>
+
+<div class="controls">
+  <button class="btn btn-start" id="start">Start</button>
+  <button class="btn btn-pause" id="pause" style="display:none">Pause</button>
+  <button class="btn btn-reset" id="reset">Reset</button>
+</div>
+
+<p class="sessions" id="sessions">Sessions: 0</p>
+
+<script>
+var duration = 25 * 60;
+var remaining = duration;
+var timer = null;
+var running = false;
+var sessionCount = parseInt(localStorage.getItem('pomodoro_sessions') || '0');
+
+document.getElementById('sessions').textContent = 'Sessions: ' + sessionCount;
+updateDisplay();
+
+document.querySelectorAll('.mode').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    document.querySelectorAll('.mode').forEach(function(b) { b.classList.remove('active'); });
+    this.classList.add('active');
+    duration = parseInt(this.dataset.min) * 60;
+    remaining = duration;
+    document.getElementById('label').textContent = this.dataset.label.toUpperCase();
+    stopTimer();
+    updateDisplay();
+  });
+});
+
+document.getElementById('start').addEventListener('click', function() {
+  if (running) {
+    stopTimer();
+    this.textContent = 'Resume';
+    return;
+  }
+  startTimer();
+});
+
+document.getElementById('pause').addEventListener('click', stopTimer);
+
+document.getElementById('reset').addEventListener('click', function() {
+  stopTimer();
+  remaining = duration;
+  updateDisplay();
+  document.getElementById('start').textContent = 'Start';
+});
+
+function startTimer() {
+  running = true;
+  timer = setInterval(tick, 1000);
+  document.getElementById('start').style.display = 'none';
+  document.getElementById('pause').style.display = 'inline-block';
+}
+
+function stopTimer() {
+  running = false;
+  if (timer) clearInterval(timer);
+  timer = null;
+  document.getElementById('start').style.display = 'inline-block';
+  document.getElementById('pause').style.display = 'none';
+  document.getElementById('start').textContent = 'Resume';
+}
+
+function tick() {
+  if (remaining <= 0) { finish(); return; }
+  remaining--;
+  updateDisplay();
+}
+
+function finish() {
+  stopTimer();
+  remaining = duration;
+  document.getElementById('start').textContent = 'Start';
+  var label = document.getElementById('label').textContent;
+  if (label === 'FOCUS') {
+    sessionCount++;
+    localStorage.setItem('pomodoro_sessions', sessionCount);
+    document.getElementById('sessions').textContent = 'Sessions: ' + sessionCount;
+  }
+  updateDisplay();
+}
+
+function updateDisplay() {
+  var m = Math.floor(remaining / 60);
+  var s = remaining % 60;
+  document.getElementById('timer').textContent = m + ':' + (s < 10 ? '0' : '') + s;
+}
+</script>
+</body>
+</html>

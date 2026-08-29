@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ICAO Search</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100dvh;padding:20px 16px}
+h1{font-size:1.5rem;color:#58a6ff;text-align:center;margin-bottom:4px}
+.sub{text-align:center;font-size:.8rem;color:#8b949e;margin-bottom:24px}
+input{width:100%;max-width:500px;display:block;margin:0 auto 20px;padding:14px 16px;font-size:1rem;background:#161b22;border:1px solid #30363d;border-radius:10px;color:#c9d1d9;outline:none;-webkit-appearance:none}
+input:focus{border-color:#58a6ff}
+#r{max-width:500px;margin:0 auto}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;margin-bottom:10px}
+.n{font-size:1rem;font-weight:600;color:#f0f6fc;margin-bottom:4px}
+.cc{display:flex;gap:10px;margin-bottom:6px;font-size:.85rem}
+.icao{color:#58a6ff;font-weight:700;font-family:monospace}
+.iata{color:#7ee787;font-weight:700;font-family:monospace}
+.loc{font-size:.8rem;color:#8b949e}
+.empty{text-align:center;color:#484f58;padding:40px 20px;font-size:.9rem}
+.ct{text-align:center;font-size:.75rem;color:#484f58;margin-top:16px}
+</style>
+</head>
+<body>
+<h1>✈️ ICAO Search</h1>
+<p class="sub">ICAO · IATA · Airport · City · Country</p>
+<input id="q" placeholder="KJFK, LHR, Heathrow, Milano..." autocomplete="off" autocorrect="off" autocapitalize="characters">
+<div id="r"></div>
+<p class="ct" id="c">7,884 airports</p>
+<script src="airports-data.js"></script>
+<script>
+function search(q){
+  var qU=q.toUpperCase(),qL=q.toLowerCase(),r=[];
+  for(var i=0;i<AIRPORTS.length;i++){
+    var a=AIRPORTS[i];
+    if(a[0]===qU||a[1]===qU){r.push(a);if(r.length>=100)break;}
+  }
+  for(var i=0;i<AIRPORTS.length&&r.length<40;i++){
+    var a=AIRPORTS[i];
+    if(a[2].toLowerCase().indexOf(qL)!==-1||a[3].toLowerCase().indexOf(qL)!==-1||a[4].toLowerCase().indexOf(qL)!==-1){
+      if(!r.some(function(x){return x[0]===a[0]}))r.push(a);
+    }
+  }
+  return r.slice(0,50);
+}
+function render(list){
+  var el=document.getElementById('r');
+  if(!list.length){el.innerHTML='<div class="empty">No results. Try KJFK, LHR, or a city name.</div>';return;}
+  var h='';
+  for(var i=0;i<list.length;i++){
+    var a=list[i];
+    h+='<div class="card"><div class="n">'+a[2]+'</div><div class="cc"><span class="icao">'+a[0]+'</span><span class="iata">'+a[1]+'</span></div><div class="loc">'+a[3]+', '+a[4]+'</div></div>';
+  }
+  el.innerHTML=h;
+}
+var t;document.getElementById('q').addEventListener('input',function(e){
+  clearTimeout(t);var v=this.value.trim();
+  if(!v){document.getElementById('r').innerHTML='';return;}
+  t=setTimeout(function(){render(search(v));},80);
+});
+</script>
+</body>
+</html>
