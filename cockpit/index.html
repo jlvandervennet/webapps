@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d1117">
+<link rel="manifest" href="/manifest.json">
+<title>Joe's Cockpit</title>
+<style>
+/* ── base ── */
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0d1117;color:#c9d1d9;min-height:100dvh;padding:env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 24px)}
+header{display:flex;align-items:flex-end;justify-content:space-between;padding:16px 0 4px}
+h1{font-size:1.3rem;color:#f0f6fc;font-weight:650;letter-spacing:-.2px}
+/* ── counter (always real, never blank) ── */
+.counter{font-size:2.3rem;font-weight:200;color:#f0f6fc;font-variant-numeric:tabular-nums;line-height:1;display:flex;align-items:baseline;gap:6px}
+.counter small{font-size:.72rem;color:#3fb950;text-transform:uppercase;letter-spacing:1px}
+.counter .hint{font-size:.66rem;color:#8b949e}
+/* ── nav (three destinations, restraint is the feature) ── */
+nav{display:flex;gap:8px;margin:14px 0 12px}
+nav .btn{flex:1;min-height:44px;font-size:.95rem;border-radius:10px;background:#21262d;color:#8b949e}
+nav .btn.btn-pick{background:rgba(88,166,255,.16);color:#58a6ff;border:1px solid rgba(88,166,255,.45)}
+/* ── panes ── */
+.pane{background:#161b22;border:1px solid #30363d;border-radius:12px;overflow:hidden}
+h2{font-size:.78rem;text-transform:uppercase;letter-spacing:1.5px;color:#8b949e;margin:0;padding:14px 14px 4px}
+/* ── lane label (Active at top of Pick — ClickUp tray) ── */
+.lane-label{font-size:.7rem;text-transform:uppercase;letter-spacing:1.2px;color:#3fb950;padding:12px 14px 4px;font-weight:700}
+/* ── rows / one action per row ── */
+.item{display:flex;align-items:flex-start;gap:12px;padding:10px 14px;border-top:1px solid #21262d;min-height:56px}
+.item:nth-child(2){border-top:none}
+.item .body{flex:1;min-width:0}
+.item .title{font-size:.98rem;color:#e6edf3;line-height:1.35}
+.item .ctx{font-size:.74rem;color:#8b949e;margin-top:2px}
+.item .actions{display:flex;flex-direction:column;gap:6px;flex:0 0 auto}
+.item.is-active{background:rgba(35,134,54,.08);border-left:3px solid #238636}
+/* ── buttons: ≥44px tap targets ── */
+.btn{border:none;border-radius:10px;min-height:44px;padding:0 16px;font-size:.9rem;font-weight:600;cursor:pointer;font-family:inherit;background:#30363d;color:#c9d1d9;display:inline-flex;align-items:center;justify-content:center}
+.btn:active{opacity:.7;transform:scale(.97)}
+.btn-go{background:#238636;color:#fff}
+.btn-pick{background:rgba(88,166,255,.16);color:#58a6ff;border:1px solid rgba(88,166,255,.45)}
+.btn-picked{background:#238636;color:#fff;border:1px solid transparent}
+.btn-sm{min-height:44px;padding:0 12px;font-size:.82rem}
+.btn-warn{background:rgba(210,153,34,.14);color:#d29922;border:1px solid rgba(210,153,34,.4)}
+.btn-bare{background:transparent;color:#8b949e;min-height:38px}
+/* destructive = red, only for drop/losing data */
+.btn-danger{background:rgba(248,81,73,.14);color:#f85149;border:1px solid rgba(248,81,73,.4)}
+/* ── slot chips (Plan) ── */
+.slots{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.slot{min-height:44px;padding:0 12px;border-radius:10px;background:#21262d;color:#e6edf3;border:1px solid #30363d;font-size:.82rem;cursor:pointer;font-family:inherit}
+.slot:active{transform:scale(.96);opacity:.8}
+/* ── inputs ── */
+input[type=date],input[type=text]{background:#0d1117;border:1px solid #30363d;border-radius:10px;color:#e6edf3;padding:12px;font-size:.9rem;font-family:inherit;width:100%;margin:2px 0}
+/* ── state blocks (empty / error / loading) — no dead air ── */
+.state{padding:22px 18px;text-align:center}
+.state .big{font-size:1.02rem;color:#e6edf3;font-weight:600;margin-bottom:6px}
+.state .sub{font-size:.85rem;color:#8b949e;line-height:1.5}
+.state .btn{margin-top:14px}
+.loading{color:#8b949e;font-size:.88rem;padding:22px 18px;text-align:center;animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+/* ── misc ── */
+.plate{display:flex;align-items:center;gap:8px;padding:6px 0 2px;font-size:.74rem;color:#8b949e}
+.plate .n{font-weight:700;color:#3fb950}
+.plate .full{color:#d29922}
+.footer{color:#484f58;font-size:.66rem;text-align:center;padding:22px 0 4px}
+.ghost{opacity:.45}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Joe's Cockpit</h1>
+  <div class="counter"><small>Done today</small><span id="count">0</span></div>
+</header>
+
+<div class="plate" id="plateBar">On your plate: <span class="n" id="plateCount">0</span> / 3</div>
+
+<nav>
+  <button class="btn btn-pick" data-tab="pick">Pick 3</button>
+  <button class="btn" data-tab="decide">Decide</button>
+  <button class="btn" data-tab="plan">Plan</button>
+</nav>
+
+<!-- ── PICK ── -->
+<section id="tab-pick" class="pane">
+  <h2>Pick 3 to focus on</h2>
+  <div id="pickBody"><div class="loading">Gathering today's…</div></div>
+</section>
+
+<!-- ── DECIDE ── -->
+<section id="tab-decide" class="pane" style="display:none">
+  <h2>One call at a time</h2>
+  <div id="decideBody"><div class="loading">Pulling open decisions…</div></div>
+</section>
+
+<!-- ── PLAN ── -->
+<section id="tab-plan" class="pane" style="display:none">
+  <h2>Block the time</h2>
+  <div id="planBody"><div class="loading">Blocking your day…</div></div>
+</section>
+
+<p class="footer">Joe's Cockpit · thin window over the vault</p>
+
+<script>
+var AUTH = localStorage.getItem('cockpit_auth') || '';
+var plate = [];
+var ACTIVE_TAB = 'pick';
+
+function setAuth(){
+  var t = prompt('Cockpit password:');
+  if (!t) return;
+  AUTH = t; localStorage.setItem('cockpit_auth', t);
+  load();
+}
+function api(path, opts){
+  opts = opts || {};
+  var headers = {'Content-Type':'application/json'};
+  if (AUTH) headers['X-Cockpit-Auth'] = AUTH;
+  if (opts.body) opts.body = JSON.stringify(opts.body);
+  opts.headers = headers;
+  return fetch(path, opts).then(function(r){
+    if (r.status === 401){ setAuth(); throw new Error('auth'); }
+    return r.json();
+  });
+}
+function esc(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* ── state helpers (no dead air) ── */
+function stateBlock(big, sub, retry){
+  return '<div class="state"><div class="big">'+big+'</div><div class="sub">'+sub+'</div>' +
+    (retry ? '<button class="btn" data-act="retry">Try again</button>' : '') + '</div>';
+}
+function emptyBlock(big, sub){ return stateBlock(big, sub); }
+
+/* ── PICK ── */
+function itemCard(it){
+  var onPlate = it.on_plate;
+  var ctx = [];
+  if (onPlate) ctx.push('on your plate now');
+  if (it.decide_by && it.has_decide_by) ctx.push('by ' + it.decide_by);
+  // one action per row: on plate -> Done; off plate -> Pick. Decisions resolve.
+  var act;
+  if (it.kind === 'decision'){
+    act = '<button class="btn btn-go btn-sm" data-act="accept" data-path="'+esc(it.path)+'">Decide</button>' +
+          (onPlate?'' : '<button class="btn btn-pick btn-sm" data-act="pick" data-path="'+esc(it.path)+'">Pick</button>');
+  } else if (onPlate){
+    // picked row: complete it, move its date, OR return it to the open list
+    // (round-6 deselect: a mistaken/abandoned pick must be unpickable).
+    act = '<button class="btn btn-go btn-sm" data-act="done" data-path="'+esc(it.path)+'">Done</button>' +
+          '<button class="btn btn-sm" data-act="deselect" data-path="'+esc(it.path)+'">Remove</button>' +
+          '<button class="btn btn-sm btn-bare" data-act="bump" data-path="'+esc(it.path)+'">Move to a day</button>';
+  } else {
+    act = '<button class="btn btn-pick btn-sm" data-act="pick" data-path="'+esc(it.path)+'">Pick</button>' +
+          '<button class="btn btn-go btn-sm" data-act="done" data-path="'+esc(it.path)+'">Done</button>';
+  }
+  return '<div class="item'+ (onPlate?' is-active':'') +'">' +
+    '<div class="body"><div class="title">'+esc(it.title)+'</div>' +
+    (ctx.length? '<div class="ctx">'+ctx.join(' · ')+'</div>' : '') + '</div>' +
+    '<div class="actions">'+act+'</div></div>';
+}
+function plate_full(){ return plate.length >= 3; }
+
+function renderPick(d){
+  plate = d.plate || [];
+  var active = d.items.filter(function(x){ return x.on_plate; });
+  var rest = d.items.filter(function(x){ return !x.on_plate; });
+  // 3 reached -> queue greys (hard visible ceiling)
+  var html = '';
+  if (active.length){
+    html += '<div class="lane-label">Active — your plate</div>' + active.map(itemCard).join('');
+  }
+  if (rest.length){
+    html += '<div class="lane-label" style="'+(plate_full()?'opacity:.55':'')+'">Up next' +
+      (plate_full()?' — plate’s full, finish one first':'') + '</div>';
+    html += '<div class="'+(plate_full()?'ghost':'')+'">' + rest.map(itemCard).join('') + '</div>';
+  }
+  if (!active.length && !rest.length){
+    html = emptyBlock('Nothing actionable right now',
+      'Goals and projects live in the vault — tell Hermes what you want next.');
+  }
+  document.getElementById('pickBody').innerHTML = html;
+  renderPlate();
+}
+
+/* ── DECIDE ── */
+function renderDecide(d){
+  var out;
+  if (d.cleared){
+    // empty is a feature: cleared deck + what's coming up (no dead air)
+    var coming = (d.coming_up||[]).map(function(c){
+      return '<div class="item"><div class="body"><div class="title">'+esc(c.title)+'</div>' +
+        '<div class="ctx">coming up — '+esc(c.decide_by||'soon')+'</div></div></div>';
+    }).join('');
+    var up = (d.coming_up&&d.coming_up.length)
+      ? '<div class="state"><div class="big">You cleared the deck — nice.</div>' +
+        '<div class="sub">Nothing needs your call right now. Here’s what’s coming up:</div></div>' +
+        coming
+      : emptyBlock('You cleared the deck — nice.','Nothing’s queued for a decision, and nothing’s coming up.');
+    out = up;
+  } else {
+    out = d.decisions.map(function(dc){
+      // PURPOSE (round-5): this panel IS the decision. One call per row,
+      // surfaced IN the app as 3 tappable options + the lean we recommend.
+      // Plain-English labels, never "go check the vault".
+      var optsHtml = (dc.options&&dc.options.length)
+        ? dc.options.map(function(opt, i){
+            var isLean = dc.has_lean && dc.lean && (opt===dc.lean || opt.indexOf(dc.lean)===0 || dc.lean.indexOf(opt)===0);
+            return '<button class="btn btn-sm '+(isLean?'btn-go':'btn-pick')+'" ' +
+              'data-act="choose" data-path="'+esc(dc.path)+'" data-opt="'+esc(opt)+'">' +
+              (isLean?'✓ ':'')+'Option '+(i+1)+': '+esc(opt)+'</button>';
+          }).join('')
+        : '<button class="btn btn-go btn-sm" data-act="accept" data-path="'+esc(dc.path)+'">' +
+          (dc.has_lean?'Go with “'+esc(dc.lean)+'”':'Decided — done')+'</button>';
+      var dateLine = dc.decide_by
+        ? '<div class="ctx">decide by '+esc(dc.decide_by)+'</div>' : '';
+      var escapeLine = '<button class="btn btn-sm btn-bare" data-act="rebase" data-path="'+esc(dc.path)+'">Not today — change the date</button>';
+      return '<div class="item decision"><div class="body">' +
+        '<div class="ctx" style="color:#d29922;margin-bottom:2px">your call:</div>' +
+        '<div class="title">'+esc(dc.title)+'</div>' + dateLine +
+        '<div class="slots" style="flex-direction:column;align-items:stretch;margin-top:8px">'+optsHtml+'</div>' +
+        escapeLine + '</div></div>';
+    }).join('');
+  }
+  document.getElementById('decideBody').innerHTML = out;
+}
+
+/* ── PLAN ── */
+function renderPlan(r){
+  var items = r.items||[];
+  if (!items.length || (r.plate_count||0) === 0){
+    document.getElementById('planBody').innerHTML =
+      emptyBlock('Pick your 3 first','Get 1–3 on your plate, then I’ll find open times and block them here.');
+    return;
+  }
+  var html = items.map(function(it){
+    var slots = it.found ? it.slots.map(function(sl, i){
+      return '<button class="slot" data-act="book" data-title="'+esc(it.title)+'" ' +
+        'data-date="'+sl.date+'" data-start="'+sl.start+'" data-end="'+sl.end+'">'+esc(sl.label)+'</button>';
+    }).join('') : '<div class="ctx">no suggestion this week — set your own time below.</div>';
+    // round-5 hybrid: suggestion is the default, but Joe can ALWAYS set his
+    // own time (confirm-or-override made real). Free date + start + end.
+    var override =
+      '<div class="ctx" style="margin-top:10px;color:#d29922">…or set your own time</div>' +
+      '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">' +
+      '<input type="date" id="own-day-'+esc(it.idx)+'" style="flex:1 1 130px">' +
+      '<input type="time" id="own-start-'+esc(it.idx)+'" style="flex:0 0 100px" value="10:00">' +
+      '<input type="time" id="own-end-'+esc(it.idx)+'" style="flex:0 0 100px" value="10:30">' +
+      '<button class="btn btn-go btn-sm" data-act="bookown" data-title="'+esc(it.title)+'" ' +
+        'data-idx="'+esc(it.idx)+'">Book it</button></div>';
+    var nudge = '<button class="btn btn-sm btn-bare" data-act="pickday" data-title="'+esc(it.title)+'" data-path="'+esc(it.path||'')+'" style="display:none">Pick a different day</button>';
+    var body = '<div class="body"><div class="title">'+esc(it.title)+'</div>' +
+      '<div class="ctx">'+ (it.found?'tap a time to book it':'no free slot found yet — set your own below.') +'</div>' +
+      '<div class="slots">'+slots+'</div>' + override + '</div>';
+    return '<div class="item is-active">'+body+'<div class="actions">'+nudge+'</div></div>';
+  }).join('');
+  document.getElementById('planBody').innerHTML = html;
+}
+function renderPlanError(){
+  document.getElementById('planBody').innerHTML =
+    stateBlock('Couldn’t sync your calendar','Check the connection and try again.', true);
+}
+
+/* ── loads ── */
+function load(area){
+  area = area || ACTIVE_TAB;
+  ACTIVE_TAB = area;
+  if (area==='pick'){
+    document.getElementById('pickBody').innerHTML = '<div class="loading">Gathering today’s…</div>';
+    api('/api/open').then(renderPick).catch(function(){
+      document.getElementById('pickBody').innerHTML =
+        stateBlock('Couldn’t reach your tasks','Check the vault connection and try again.', true);
+    });
+  } else if (area==='decide'){
+    document.getElementById('decideBody').innerHTML = '<div class="loading">Pulling open decisions…</div>';
+    api('/api/decide').then(renderDecide).catch(function(){
+      document.getElementById('decideBody').innerHTML =
+        stateBlock('Couldn’t load decisions','Check the connection and try again.', true);
+    });
+  } else if (area==='plan'){
+    document.getElementById('planBody').innerHTML = '<div class="loading">Blocking your day…</div>';
+    api('/api/schedule').then(renderPlan).catch(renderPlanError);
+  }
+  api('/api/today').then(updateCounter).catch(function(){});
+}
+function renderPlate(){
+  document.getElementById('plateCount').textContent = plate.length;
+  document.getElementById('plateBar').className = 'plate' + (plate_full()?'':'');
+}
+function updateCounter(d){
+  document.getElementById('count').textContent = d.done_count||0;
+}
+
+/* ── actions ── */
+document.addEventListener('click', function(ev){
+  var b = ev.target.closest('[data-act]');
+  if (!b) return;
+  var act = b.dataset.act, path = b.dataset.path;
+  if (act==='pick'){
+    if (plate_full()){ alert('Your plate is full — finish one of the 3 first.'); return; }
+    if (plate.indexOf(path)===-1) plate.push(path);
+    api('/api/plate',{method:'POST',body:{paths:plate}}).then(function(){ load('pick'); });
+  } else if (act==='deselect'){
+    // round-6: unpick — return to the open list without completing. Removes the
+    // task from the active plate and frees a slot so Joe can pick another.
+    var i = plate.indexOf(path);
+    if (i !== -1) plate.splice(i, 1);
+    api('/api/plate',{method:'POST',body:{paths:plate}}).then(function(){
+      load('pick');
+    });
+  } else if (act==='done'){
+    api('/api/done',{method:'POST',body:{path:path}}).then(function(r){
+      if (r.ok && !r.deduped){
+        // observable write-back (round-3): show Joe exactly what Done wrote
+        alert('✅ Done — "'+r.title+'"\n' +
+          'task marked done (open → '+r.status_after+')\n' +
+          (r.logged_log ? 'logged to today\'s done list' : '') +
+          '\n(number went up, not double-counted)');
+        load(); refreshCounter();
+      } else if (r.ok && r.deduped){
+        alert('That was already done — not counted twice.');
+        load(); refreshCounter();
+      } else {
+        alert(r.output || 'Couldn\'t mark that done.');
+      }
+    });
+  } else if (act==='choose'){
+    // round-5 Decide: pick an option = make the call IN the app. Record which
+    // option was chosen (as the note's default) so it's observable, then close.
+    var opt = b.dataset.opt;
+    if (opt && !confirm('Go with: ' + opt)) return;
+    api('/api/resolve',{method:'POST',body:{path:path, chosen:opt||''}}).then(function(){
+      load('decide'); refreshCounter();
+    });
+  } else if (act==='accept'){
+    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); });
+  } else if (act==='resolve'){
+    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); });
+  } else if (act==='retry'){
+    load();
+  } else if (act==='rebase'){
+    var d = prompt('New decide-by date (YYYY-MM-DD):');
+    if (!d) return;
+    api('/api/set-due',{method:'POST',body:{path:path,due:d}}).then(function(){ load('decide'); });
+  } else if (act==='bump'){
+    var d = prompt('Move it to which day? (YYYY-MM-DD)');
+    if (!d) return;
+    api('/api/set-due',{method:'POST',body:{path:path,due:d}}).then(function(){
+      // reschedule, don't drop: it stays in the list with a new date
+      alert('Moved — still on your plate, now due ' + d + '.');
+      load('pick');
+    });
+  } else if (act==='book'){
+    var title=b.dataset.title,date=b.dataset.date,start=b.dataset.start,end=b.dataset.end;
+    if(!confirm('Add “'+title+'” '+date+' '+start+'–'+end+' to your calendar?')) return;
+    api('/api/book',{method:'POST',body:{summary:title,start:date+'T'+start,end:date+'T'+end}}).then(function(r){
+      alert(r.ok ? 'Booked — on your calendar ✓' : (r.output||'Couldn’t book that one.'));
+    });
+  } else if (act==='bookown'){
+    // round-5 hybrid manual override: Joe set his OWN time; book exactly that.
+    var t=b.dataset.title, ix=b.dataset.idx;
+    var day=document.getElementById('own-day-'+ix).value;
+    var ss=document.getElementById('own-start-'+ix).value;
+    var ee=document.getElementById('own-end-'+ix).value;
+    if(!day||!ss||!ee){ alert('Pick a day and start/end times first.'); return; }
+    api('/api/book',{method:'POST',body:{summary:t,start:day+'T'+ss,end:day+'T'+ee}}).then(function(r){
+      alert(r.ok ? 'Booked — on your calendar ✓' : (r.output||'Couldn’t book that one.'));
+    });
+  } else if (act==='pickday'){
+    var t=b.dataset.title; var d=prompt('Which day? (YYYY-MM-DD)');
+    if(!d) return;
+    // book a 30-min block that chosen day 09:00 (proxy; backend books via sched)
+    api('/api/book',{method:'POST',body:{summary:t,start:d+'T09:00',end:d+'T09:30'}}).then(function(r){
+      alert(r.ok ? 'Booked — on your calendar ✓' : (r.output||'Couldn’t book that one.'));
+    });
+  }
+});
+function refreshCounter(){ api('/api/today').then(updateCounter).catch(function(){}); }
+
+/* ── tabs ── */
+document.querySelectorAll('[data-tab]').forEach(function(tab){
+  tab.addEventListener('click', function(){
+    document.querySelectorAll('[data-tab]').forEach(function(t){t.classList.remove('btn-pick');});
+    tab.classList.add('btn-pick');
+    var k = tab.dataset.tab;
+    ['pick','decide','plan'].forEach(function(p){
+      document.getElementById('tab-'+p).style.display = (p===k?'block':'none');
+    });
+    load(k);
+  });
+});
+
+/* service worker */
+if ('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js'); }
+if (!AUTH) setAuth(); else load('pick');
+</script>
+</body>
+</html>

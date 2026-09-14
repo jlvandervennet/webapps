@@ -1,0 +1,37 @@
+# Cockpit deploy — Hephaestus, 2026-09-14. Additive service, own project.
+# Does NOT touch the live agent/webui stack. Tailscale-private only.
+# Same image as the webui (has /opt/data + the hermes venv).
+#
+# Add COCKPIT_PASSWORD=<secret> to /opt/data/cockpit/cockpit.env (0600) —
+# never in this file or the vault. Then `docker compose up -d`.
+services:
+  cockpit:
+    image: hostinger-hermes-webui:latest
+    container_name: cockpit-api
+    restart: unless-stopped
+    ports:
+      - "100.113.241.19:8792:8792"
+    environment:
+      - VAULT_ROOT=/opt/data/Second-Brain
+      # Listen on 0.0.0.0 INSIDE the container. The host's docker-proxy binds
+      # the published port to 100.113.241.19 (Tailscale-only) via the `ports`
+      # mapping, so the external surface stays Tailscale-private — the
+      # container itself has no Tailscale IP assigned in its netns.
+      - COCKPIT_HOST=0.0.0.0
+      - COCKPIT_PORT=8792
+      # NOTE: COCKPIT_PASSWORD deliberately comes ONLY from `env_file:
+      # cockpit.env`. Declaring it here as ${COCKPIT_PASSWORD:-} would render
+      # empty (no companion .env) and OVERRIDE the env_file value — the exact
+      # bug that disabled auth on the first deploy attempt.
+    env_file:
+      - cockpit.env
+    # The base image ENTRYPOINT is the gateway/webui launcher; override it so
+    # `command` (below) actually runs the cockpit API instead of the whole
+    # agent stack — this is a thin add-on, not a second agent.
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["/opt/hermes/.venv/bin/python /opt/data/vault-mcp/cockpit_api.py"]
+    volumes:
+      # The vault (single source of truth) + the shared core + the PWA shell.
+      # Absolute host path (the compose file itself lives INSIDE data/cockpit,
+      # so a relative ./data would resolve to .../data/cockpit/data — wrong).
+      - /docker/hermes-agent-98dj/data:/opt/data
