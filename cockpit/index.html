@@ -166,6 +166,7 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 <div class="dumpit">
   <div class="glass">
     <input id="quickAdd" type="text" inputmode="text" autocomplete="off"
+      autocorrect="off" autocapitalize="sentences" spellcheck="false"
       placeholder="Quick thought… type + Enter" aria-label="Quick add a thought">
     <button class="dump-add" id="quickAddBtn" aria-label="Add thought">+</button>
   </div>
@@ -446,7 +447,27 @@ function renderPlate(){
   var el = document.getElementById('plateCount');
   if (el) el.textContent = plate.length;
 }
-function updateCounter(d){ document.getElementById('count').textContent = d.done_count||0; }
+function todayStr(){
+  var n = new Date();
+  return n.getFullYear() + '-' + ('0'+(n.getMonth()+1)).slice(-2) + '-' + ('0'+n.getDate()).slice(-2);
+}
+/* ROUND-11 fix#2: Done-Today counter resets to 0 on a new calendar day. On
+   first run each day (localStorage date != today), show 0 immediately so the
+   morning always starts clean, then reconcile with the server payload. */
+function updateCounter(d){
+  var countEl = document.getElementById('count');
+  if (!countEl) return;
+  var today = todayStr();
+  var last = localStorage.getItem('cockpit_counter_date');
+  // day rolled (or first run): clean slate to 0 so every morning starts clean
+  if (last !== today){
+    countEl.textContent = '0';
+    localStorage.setItem('cockpit_counter_date', today);
+  } else {
+    // same day: show the authoritative, deduped server count
+    countEl.textContent = (d && d.done_count != null) ? d.done_count : '0';
+  }
+}
 
 /* ── THOUGHT-DUMP: autofocus on load + Enter appends INSTANTLY (optimistic) ──
    Dispatched immediately, rendered with a pop, then synced after. Backend has
@@ -494,10 +515,26 @@ document.addEventListener('click', function(ev){
     flipPlate(path, false);              // instant local (iOS-lag fix)
     api('/api/plate',{method:'POST',body:{paths:plate}});  // background sync
   } else if (act==='done'){
+    // ROUND-11 fix#3: 0ms optimistic — flip the row to Done on screen NOW,
+    // bump the counter locally, THEN sync to the vault in the background so
+    // a slow network never freezes the UI.
+    if (_openCache){
+      // remove the row now so the completed task vanishes off-screen instantly
+      for (var di=0;di<_openCache.items.length;di++){
+        if (_openCache.items[di].path === path){ _openCache.items.splice(di,1); break; }
+      }
+      renderPick(_openCache);
+    }
+    // bump the Done-Today counter immediately (optimistic number-go-up)
+    var cEl = document.getElementById('count');
+    if (cEl && todayStr() === (localStorage.getItem('cockpit_counter_date') || todayStr())){
+      cEl.textContent = (parseInt(cEl.textContent||'0',10)||0) + 1;
+    }
+    // background sync
     api('/api/done',{method:'POST',body:{path:path}}).then(function(r){
-      if (r.ok && !r.deduped){ load(); refreshCounter(); }
-      else if (r.ok && r.deduped){ alert('That was already done — not counted twice.'); load(); refreshCounter(); }
-      else { alert(r.output || 'Couldn’t mark that done.'); }
+      if (r && r.ok){ load(); refreshCounter(); }
+      else if (r && r.deduped){ load(); refreshCounter(); }
+      else { alert((r&&r.output) || 'Couldn’t mark that done.'); load(); }
     });
   } else if (act==='choose'){
     var opt = b.dataset.opt;
@@ -544,8 +581,11 @@ document.addEventListener('click', function(ev){
   } else if (act==='book'){
     var title=b.dataset.title,date=b.dataset.date,start=b.dataset.start,end=b.dataset.end;
     if(!confirm('Add “'+title+'” '+date+' '+start+'–'+end+' to your calendar?')) return;
+    // 0ms optimistic: mark the slot booked on screen NOW, sync in background
+    b.textContent = '✓ Booked'; b.disabled = true;
+    b.style.opacity = .6;
     api('/api/book',{method:'POST',body:{summary:title,start:date+'T'+start,end:date+'T'+end}}).then(function(r){
-      alert(r.ok ? 'Booked — on your calendar ✓' : (r.output||'Couldn’t book that one.'));
+      if(!r.ok){ b.textContent = 'Book again'; b.disabled=false; b.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
     });
   } else if (act==='bookown'){
     var t=b.dataset.title, ix=b.dataset.idx;
@@ -553,8 +593,10 @@ document.addEventListener('click', function(ev){
     var ss=document.getElementById('own-start-'+ix).value;
     var ee=document.getElementById('own-end-'+ix).value;
     if(!day||!ss||!ee){ alert('Pick a day and start/end times first.'); return; }
+    // 0ms optimistic
+    b.textContent = '✓ Booked'; b.disabled = true; b.style.opacity = .6;
     api('/api/book',{method:'POST',body:{summary:t,start:day+'T'+ss,end:day+'T'+ee}}).then(function(r){
-      alert(r.ok ? 'Booked — on your calendar ✓' : (r.output||'Couldn’t book that one.'));
+      if(!r.ok){ b.textContent = 'Book it'; b.disabled=false; b.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
     });
   } else if (act==='pickday'){
     var t=b.dataset.title; var d=prompt('Which day? (YYYY-MM-DD)');
@@ -596,6 +638,17 @@ if ('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js'); }
 if (!AUTH) setAuth(); else load('pick');
 /* FRICTIONLESS: autofocus the dump input the instant the app loads */
 (function(){ var q=document.getElementById('quickAdd'); if(q){ q.focus(); } })();
+/* ROUND-11 fix#2: reset Done-Today to a clean 0 the moment the app loads on a
+   new calendar day — before any network fetch resolves. */
+(function(){
+  var last = localStorage.getItem('cockpit_counter_date');
+  var today = todayStr();
+  if (last !== today){
+    var c = document.getElementById('count');
+    if (c) c.textContent = '0';
+    localStorage.setItem('cockpit_counter_date', today);
+  }
+})();
 </script>
 </body>
 </html>
