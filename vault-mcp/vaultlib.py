@@ -94,26 +94,56 @@ def split_frontmatter(text: str):
 def _parse_yamlish(block: str) -> dict:
     """Minimal frontmatter parser for flat key: value lines (GL-002 style).
 
-    Handles scalars, booleans, integers, quoted/unquoted strings, and simple
-    YAML lists (`- item`). Not a full YAML parser; sufficient for GL-002 notes.
+    Handles scalars, booleans, integers, quoted/unquoted strings, INLINE lists
+    (`[a, b]`) and BLOCK lists (``key:`` then ``  - item`` lines) — the block
+    list form is how `tags:` are hand-authored, and MUST survive a write-back
+    (round-12 critical: the flat parser was silently flattening them to "").
     """
     fm = {}
-    for raw in block.splitlines():
-        line = raw.rstrip()
+    lines = block.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
         if not line or line.startswith("#"):
+            i += 1
             continue
-        if line.startswith("  - ") or line.startswith("- "):  # list continuation
+        if line.startswith("  - ") or line.startswith("- "):
+            # orphan list continuation (no key above) — skip defensively
+            i += 1
             continue
         if ":" not in line:
+            i += 1
             continue
         key, _, val = line.partition(":")
         key = key.strip().strip('"').strip("'")
         val = val.strip()
         if not key:
+            i += 1
+            continue
+        # BLOCK list: `key:` with an empty (or absent) value, followed by
+        # indented `  - item` lines -> collect them as a list.
+        if val in ("", "[]"):
+            items = []
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j]
+                s = nxt.strip()
+                if s.startswith("- "):
+                    item = s[2:].strip()
+                    item = item.strip('"').strip("'")
+                    items.append(item)
+                    j += 1
+                    continue
+                break
+            if items:
+                fm[key] = items
+                i = j
+                continue
+            fm[key] = _parse_scalar(val)
+            i += 1
             continue
         fm[key] = _parse_scalar(val)
-    # Recurse for simple lists? Keep flat for now — GL-002 lists are uncommon
-    # in the fields the cockpit reads (awaiting, decision, do-by, default).
+        i += 1
     return fm
 
 
@@ -216,8 +246,9 @@ def _is_plain_scalar(s):
     """True if a string is safe to write unquoted (and re-parse unchanged).
 
     Must BOTH (a) be a YAML-safe plain word AND (b) not collide with a bare
-    non-string scalar (`true/yes/no/null` -> bool/None, `123` -> int), which
-    would break the parse round-trip. Letters/digits/_-.@/ only.
+    non-string scalar (`true/yes/no/null` -> bool/None, `123` -> int), AND
+    (c) not look like a DATE/TIMESTAMP — hand-authored style QUOTES dates
+    (`created: "2026-09-14"`), so we keep them quoted to match (round-12).
     """
     if not s:
         return False
@@ -226,6 +257,9 @@ def _is_plain_scalar(s):
     low = s.lower()
     if low in ("true", "yes", "false", "no", "null", "~", "on", "off"):
         return False                # would re-parse as bool / None
+    # date/timestamp lookalike (leading digits then a - or T) -> quote it
+    if re.match(r"^\d{4}-\d{2}-\d{2}", s):
+        return False
     if low.lstrip("-").replace(".", "", 1).isdigit() and low.lstrip("-"):
         return False                # looks numeric -> would re-parse as int/float
     return True
