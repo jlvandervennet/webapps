@@ -46,6 +46,16 @@ nav button.here{background:rgba(88,166,255,.22);color:#58a6ff;border:1px solid r
 h2{font-size:.82rem;text-transform:uppercase;letter-spacing:1.6px;color:#8b949e;margin:0 0 10px}
 .lane-label{font-size:.78rem;text-transform:uppercase;letter-spacing:1.3px;color:#3fb950;
   padding:14px 0 6px;font-weight:700}
+/* ── ROUND-8: structural breathing room between the 3 core sections ──
+   (1) quick capture  (2) 3-panel toggle nav  (3) active task list  */
+.dumpit{margin:16px 0 0}
+nav{margin-top:22px}
+.pane{margin-top:22px}
+/* ── ROUND-8: Decider left-align + reading width (was center/scrunched) ── */
+#decideBody{text-align:left;max-width:60ch;margin:0 auto;line-height:1.5}
+#decideBody .item{text-align:left}
+#decideBody .state{text-align:left}
+.loading{text-align:center}
 /* ── ROWS / one thing at a time, huge targets ── */
 .item{display:flex;align-items:flex-start;gap:14px;padding:16px 16px;min-height:64px;
   background:rgba(48,54,61,.18);border:1px solid rgba(48,54,61,.3);border-radius:18px;margin-bottom:10px}
@@ -105,6 +115,17 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
   background:rgba(48,54,61,.28);color:#8b949e;font-size:1rem;border:1px solid rgba(48,54,61,.4)}
 .done-pop{animation:pop .5s ease}
 @keyframes pop{0%{transform:scale(.6);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+/* ── ROUND-8: move-date nudge sheet ── */
+.bump-sheet{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;justify-content:center;
+  align-items:flex-end;padding:16px 0 calc(env(safe-area-inset-bottom) + 18px);
+  background:rgba(13,17,23,.55);backdrop-filter:blur(6px)}
+.bump-sheet .glass-strong{width:100%;padding:20px 18px;border-radius:24px}
+.bump-title{font-size:1.1rem;color:#f0f6fc;font-weight:700;margin-bottom:4px}
+.bump-sub{font-size:.9rem;color:#8b949e;word-wrap:break-word;overflow-wrap:break-word;margin-bottom:14px}
+.bump-sheet .actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.bump-sheet #bumpDate{flex:1 1 150px}
+.bump-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.bump-hint{font-size:.78rem;color:#3fb950}
 @media (min-width:700px){ body{font-size:1rem} }
 </style>
 </head>
@@ -144,6 +165,25 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
   <h2>Block the time</h2>
   <div id="planBody"><div class="loading">Blocking your day…</div></div>
 </section>
+
+<!-- ROUND-8: Move-date nudge sheet — quick picks, not a raw date prompt -->
+<div id="bumpSheet" class="bump-sheet" style="display:none" role="dialog" aria-label="Nudge this task">
+  <div class="glass-strong">
+    <div class="bump-title">Move this task</div>
+    <div class="bump-sub" id="bumpTitle"></div>
+    <div class="actions">
+      <button class="btn btn-go btn-sm" data-act="bump-pick" data-day="+1">Tomorrow</button>
+      <button class="btn btn-pick btn-sm" data-act="bump-pick" data-day="weekend">This weekend</button>
+      <button class="btn btn-sm" data-act="bump-pick" data-day="+7">Next week</button>
+      <input type="date" id="bumpDate" aria-label="Pick a day">
+      <button class="btn btn-go btn-sm" data-act="bump-pick" data-day="custom">Go</button>
+    </div>
+    <div class="bump-foot">
+      <button class="btn btn-sm btn-bare" data-act="bump-cancel">Cancel</button>
+      <span class="bump-hint">it stays on your plate — just nudged</span>
+    </div>
+  </div>
+</div>
 
 <p class="footer">Joe's Cockpit · thin window over the vault</p>
 
@@ -229,10 +269,16 @@ function itemCard(it, fresh){
 }
 function plate_full(){ return plate.length >= 3; }
 
+/* ── ROUND-8 iOS-lag: cache last /api/open + light re-render on a single
+   toggle, instead of re-fetching + rebuilding the whole list on every change */
+var _openCache = null;   // {items, plate, plate_full} from the last fetch
+
 function renderPick(d){
+  _openCache = d;
   plate = d.plate || [];
-  var active = d.items.filter(function(x){ return x.on_plate; });
-  var rest = d.items.filter(function(x){ return !x.on_plate; });
+  var items = d.items || [];
+  var active = items.filter(function(x){ return x.on_plate; });
+  var rest = items.filter(function(x){ return !x.on_plate; });
   var html = '';
   // Active lane always first — the ONE thing (or up to 3) Joe is doing now.
   if (active.length){
@@ -328,6 +374,21 @@ function renderPlanError(){
 }
 
 /* ── loads ── */
+/* ROUND-8: optimistic single-task toggle — flip the item locally, patch the
+   cached list, re-render THAT lane cheaply, then sync the write in the
+   background. No full-list refetch+rebuild per tap = instant on iOS. */
+function flipPlate(path, add){
+  if (_openCache){                       // local-first: reuse cached items
+    for (var i=0;i<_openCache.items.length;i++){
+      if (_openCache.items[i].path === path){ _openCache.items[i].on_plate = add; break; }
+    }
+  }
+  plate = add ? (plate.indexOf(path)<0 ? plate.concat([path]) : plate)
+              : plate.filter(function(p){ return p!==path; });
+  renderPick(_openCache);                // light rebuild from cache (no fetch)
+  document.getElementById('plateCount').textContent = plate.length;
+}
+
 function load(area){
   area = area || ACTIVE_TAB; ACTIVE_TAB = area;
   if (area==='pick'){
@@ -392,12 +453,11 @@ document.addEventListener('click', function(ev){
   var act = b.dataset.act, path = b.dataset.path;
   if (act==='pick'){
     if (plate_full()){ alert('Your plate is full — finish one of the 3 first.'); return; }
-    if (plate.indexOf(path)===-1) plate.push(path);
-    api('/api/plate',{method:'POST',body:{paths:plate}}).then(function(){ load('pick'); });
+    flipPlate(path, true);               // instant local (iOS-lag fix)
+    api('/api/plate',{method:'POST',body:{paths:plate}});  // background sync
   } else if (act==='deselect'){
-    var i = plate.indexOf(path);
-    if (i!==-1) plate.splice(i,1);
-    api('/api/plate',{method:'POST',body:{paths:plate}}).then(function(){ load('pick'); });
+    flipPlate(path, false);              // instant local (iOS-lag fix)
+    api('/api/plate',{method:'POST',body:{paths:plate}});  // background sync
   } else if (act==='done'){
     api('/api/done',{method:'POST',body:{path:path}}).then(function(r){
       if (r.ok && !r.deduped){ load(); refreshCounter(); }
@@ -419,9 +479,33 @@ document.addEventListener('click', function(ev){
     if (!d) return;
     api('/api/set-due',{method:'POST',body:{path:path,due:d}}).then(function(){ load('decide'); });
   } else if (act==='bump'){
-    var d = prompt('Move it to which day? (YYYY-MM-DD)');
-    if (!d) return;
-    api('/api/set-due',{method:'POST',body:{path:path,due:d}}).then(function(){ alert('Moved — still on your plate, now due ' + d + '.'); load('pick'); });
+    // ROUND-8: open the nudge sheet (quick picks, no raw date prompt)
+    document.getElementById('bumpTitle').textContent = path.split('/').pop();
+    document.getElementById('bumpSheet').style.display = 'flex';
+  } else if (act==='bump-cancel'){
+    document.getElementById('bumpSheet').style.display = 'none';
+  } else if (act==='bump-pick'){
+    var target = null;
+    var day = b.dataset.day;
+    if (day === 'custom'){
+      target = document.getElementById('bumpDate').value;
+      if (!target){ alert('Pick a day first.'); return; }
+    } else {
+      var n = new Date();
+      if (day === 'weekend'){
+        var dow = n.getDay(); // 0=sun,6=sat => "this weekend" = next Sat
+        n.setDate(n.getDate() + ((6 - dow + 7) % 7) + (dow===6?7:0));
+      } else if (day === '+1'){ n.setDate(n.getDate() + 1); }
+      else if (day === '+7'){ n.setDate(n.getDate() + 7); }
+      else { n.setDate(n.getDate() + (parseInt(day)||1)); }
+      target = n.getFullYear() + '-' + ('0'+(n.getMonth()+1)).slice(-2) + '-' + ('0'+n.getDate()).slice(-2);
+    }
+    document.getElementById('bumpSheet').style.display = 'none';
+    // sets the due date AND keeps it on the plate (reschedule-don't-drop)
+    api('/api/set-due',{method:'POST',body:{path:path, due:target}}).then(function(){
+      alert('Moved — still on your plate, now due ' + target + '.');
+      load('pick');
+    });
   } else if (act==='book'){
     var title=b.dataset.title,date=b.dataset.date,start=b.dataset.start,end=b.dataset.end;
     if(!confirm('Add “'+title+'” '+date+' '+start+'–'+end+' to your calendar?')) return;
