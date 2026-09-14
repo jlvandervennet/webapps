@@ -159,6 +159,19 @@ nav{margin-top:22px}
 .plan-badge{display:inline-flex;align-items:center;gap:6px;margin-top:8px;
   padding:10px 14px;border-radius:12px;background:#161b22;border:1px solid #30363d;
   color:#58a6ff;font-size:.92rem;font-weight:600;letter-spacing:.2px}
+/* ROUND-19: badge is a button -> expand inline reschedule picker */
+.plan-badge-btn{cursor:pointer;width:100%;justify-content:flex-start;text-align:left;
+  font-family:inherit;transition:transform .1s ease,color .1s ease}
+.plan-badge-btn:active{transform:scale(.98);color:#f0f6fc;border-color:#58a6ff}
+.badge-hint{color:#8b949e;font-weight:400;font-size:.82rem;letter-spacing:0}
+.plan-resched{margin-top:10px;padding:12px;border:1px solid #30363d;border-radius:12px;
+  background:rgba(13,17,23,.5)}
+.plan-resched[hidden]{display:none}
+.rs-field{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.rs-field label{color:#8b949e;font-size:.8rem}
+.rs-slot{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+.rs-slot input[type=time]{flex:1}
+.rs-slot span{color:#8b949e}
 .plan-title.tappable{cursor:pointer;border-bottom:1px dashed transparent;
   transition:border-color .1s ease}
 .plan-title.tappable:active{border-bottom-color:#58a6ff;color:#58a6ff}
@@ -499,10 +512,22 @@ function renderPlan(r){
       // hide the slot chips + Book it entirely, show a non-interactive badge.
       if (it.locked){
         var bookedslot = it.booked_label || '';
-        return '<div class="plan-card plan-card-locked"><div class="body">' +
+        var bstart = it.booked_start || '';
+        var bend = it.booked_end || '';
+        var bdate = (bstart||'').slice(0,10);
+        var bhh = (bstart||'').slice(11,16), bhh2 = (bend||'').slice(11,16);
+        return '<div class="plan-card plan-card-locked" id="plk-'+esc(it.idx)+'">' +
+          '<div class="body">' +
           '<div class="title plan-title tappable" data-act="planedittitle" data-path="'+esc(it.path||'')+'" data-title="'+esc(it.title)+'" data-event="'+esc(it.event_id||'')+'">'+esc(it.title)+'</div>' +
-          '<div class="plan-badge">\u2713 Booked for '+esc(bookedslot)+'</div>' +
-          '<div class="plan-note" style="margin-top:6px">Tap the task name to edit it \u2014 syncs to your calendar.</div>' +
+          // ROUND-19: badge is now a BUTTON -> expands the inline reschedule picker
+          '<button class="plan-badge plan-badge-btn" data-act="planresched" data-idx="'+esc(it.idx)+'" data-event="'+esc(it.event_id||'')+'" data-title="'+esc(it.title)+'" data-date="'+esc(bdate)+'" data-start="'+esc(bhh)+'" data-end="'+esc(bhh2)+'">&#10003; Booked for '+esc(bookedslot)+' <span class="badge-hint">(Tap to reschedule)</span></button>' +
+          // collapsible inline reschedule panel
+          '<div class="plan-resched" id="plan-rs-'+esc(it.idx)+'" hidden>' +
+          '<div class="rs-field"><label>Day</label><input type="date" id="rs-day-'+esc(it.idx)+'" value="'+esc(bdate)+'"></div>' +
+          '<div class="rs-slot"><input type="time" id="rs-start-'+esc(it.idx)+'" value="'+esc(bhh)+'"><span>–</span><input type="time" id="rs-end-'+esc(it.idx)+'" value="'+esc(bhh2)+'"></div>' +
+          '<button class="plan-book plan-book-primary" data-act="planresched-save" data-idx="'+esc(it.idx)+'" data-event="'+esc(it.event_id||'')+'" data-title="'+esc(it.title)+'">Reschedule &#8212; save new time</button>' +
+          '<div class="plan-note" style="margin-top:6px">Moves this task on your calendar. Tap the name to rename it instead.</div>' +
+          '</div>' +
           '</div></div>';
       }
       var slots = it.slots || [];
@@ -844,6 +869,32 @@ document.addEventListener('click', function(ev){
           if(!r.ok){ target.textContent = 'Book again'; target.disabled=false; target.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
         });
       });
+  } else if (act==='planresched'){
+    var panel = document.getElementById('plan-rs-'+b.dataset.idx);
+    if (panel){
+      if (panel.hasAttribute('hidden')) panel.removeAttribute('hidden');
+      else panel.setAttribute('hidden', '');
+    }
+  } else if (act==='planresched-save'){
+    // ROUND-19: move the booked event to a new day/time -> gcal PATCH -> collapse
+    var ix = b.dataset.idx, eid = b.dataset.event, ttl = b.dataset.title;
+    var day = document.getElementById('rs-day-'+ix).value;
+    var ss = document.getElementById('rs-start-'+ix).value;
+    var ee = document.getElementById('rs-end-'+ix).value;
+    if(!day||!ss||!ee){ alert('Pick a day and start/end times first.'); return; }
+    var nstart = day+'T'+ss+':00+02:00', nend = day+'T'+ee+':00+02:00';
+    b.textContent = 'Moving…'; b.disabled = true;
+    api('/api/calendar/update',{method:'POST',body:{event_id:eid, start:nstart, end:nend}}).then(function(r){
+      if(r && r.ok){
+        // collapse back to the locked quiet badge showing the NEW time
+        var panel = document.getElementById('plan-rs-'+ix);
+        if (panel) panel.setAttribute('hidden','');
+        load('plan');
+      } else {
+        b.textContent = 'Reschedule — save new time'; b.disabled=false;
+        alert((r&&r.output)||'Couldn\u2019t move it — try again.');
+      }
+    }).catch(function(){ b.textContent='Reschedule — save new time'; b.disabled=false; alert('Couldn\u2019t reach the calendar.'); });
   } else if (act==='planedittitle'){
     // ROUND-18: inline title edit on a locked task. Tap header -> input; Enter/blur
     // saves the new title to the vault (safe rename) then PATCHes the matching Google
