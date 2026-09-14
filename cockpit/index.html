@@ -7,15 +7,27 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#0d1117">
 <link rel="manifest" href="/manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-omega-192.png">
+<link rel="apple-touch-icon" href="/icon-omega-192.png">
 <title>Joe's Cockpit</title>
 <style>
 /* ── RESET / base ── */
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+/* ROUND-9 premium: clean sans stack + #0d1117 base, thin dividers, micro-press */
+body{font-family:system-ui,-apple-system,'Segoe UI',BlinkMacSystemFont,sans-serif;
   background:#0d1117;color:#e6edf3;min-height:100dvh;
   padding:calc(env(safe-area-inset-top) + 8px) 12px calc(env(safe-area-inset-bottom) + 30px);
   user-select:none;-webkit-user-select:none}
+/* interactive elements / cards / button states = lighter slate #161b22 */
+.slate{background:#161b22}
+.btn,.item,.plan-card,.slot,.show-rest{border:1px solid #30363d;
+  transition:transform .1s ease;background:#161b22}
+.btn:active,.plan-book:active,.slot:active,.item:active{border-color:#30363d;
+  transform:scale(.98);transition:transform .1s ease}
+/* active text bright, secondary/completed muted */
+.title{color:#f0f6fc}
+.ctx{color:#8b949e}
 /* ── GLASSMORPHIC atoms (Joe: #0d1117 dark glass) ── */
 .glass{background:rgba(22,27,34,.55);-webkit-backdrop-filter:blur(18px) saturate(1.15);
   backdrop-filter:blur(18px) saturate(1.15);border:1px solid rgba(48,54,61,.55);
@@ -57,42 +69,50 @@ nav{margin-top:22px}
 #decideBody .state{text-align:left}
 .loading{text-align:center}
 /* ── ROWS / one thing at a time, huge targets ── */
-.item{display:flex;align-items:flex-start;gap:14px;padding:16px 16px;min-height:64px;
-  background:rgba(48,54,61,.18);border:1px solid rgba(48,54,61,.3);border-radius:18px;margin-bottom:10px}
+.item{display:flex;align-items:flex-start;gap:14px;padding:1rem;min-height:64px;
+  background:#161b22;border:1px solid #30363d;border-radius:18px;margin-bottom:10px;
+  transition:transform .1s ease}
 .item:last-child{margin-bottom:0}
 .item .body{flex:1;min-width:0}
-.item .title{font-size:1.18rem;color:#e6edf3;line-height:1.4;font-weight:600;
+.item .title{font-size:1.18rem;color:#f0f6fc;line-height:1.5;font-weight:600;
   word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;
   overflow:hidden;display:block;min-height:1.4em}
 .item .ctx{font-size:.84rem;color:#8b949e;margin-top:4px;word-wrap:break-word;overflow-wrap:break-word}
 .item .actions{display:flex;flex-direction:column;gap:8px;flex:0 0 auto}
-.item.is-active{background:rgba(35,134,54,.16);border:1px solid rgba(35,134,54,.45)}
-/* ── BUTTONS ≥50px touch targets ── */
-.btn{border:none;border-radius:16px;min-height:50px;padding:0 18px;font-size:1rem;font-weight:650;
-  cursor:pointer;font-family:inherit;background:rgba(48,54,61,.4);color:#e6edf3;
-  display:inline-flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)}
-.btn:active{transform:scale(.96);opacity:.75}
+.item.is-active{background:rgba(35,134,54,.16);border:1px solid #238636}
+/* ── BUTTONS ≥50px touch targets (premium: slate, thin, scale .98 press) ── */
+.btn{border:1px solid #30363d;border-radius:16px;min-height:50px;padding:0 18px;font-size:1rem;font-weight:650;
+  cursor:pointer;font-family:inherit;background:#161b22;color:#f0f6fc;
+  display:inline-flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);
+  transition:transform .1s ease,background .1s ease}
+.btn:active{transform:scale(.98);opacity:.85;transition:transform .1s ease}
 .btn-go{background:rgba(35,134,54,.8);color:#fff}
-.btn-pick{background:rgba(88,166,255,.22);color:#58a6ff;border:1px solid rgba(88,166,255,.5)}
+.btn-pick{background:rgba(88,166,255,.22);color:#58a6ff;border:1px solid #30363d}
 .btn-sm{min-height:52px;padding:0 14px;font-size:.96rem}
 .btn-bare{background:transparent;color:#8b949e;min-height:44px}
 /* ── slots ── */
 .slots{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-.slot{min-height:52px;padding:0 14px;border-radius:16px;background:rgba(33,38,45,.55);
-  color:#e6edf3;border:1px solid rgba(48,54,61,.5);font-size:.94rem;cursor:pointer;font-family:inherit}
+.slot{min-height:52px;padding:0 14px;border-radius:16px;background:#161b22;
+  color:#f0f6fc;border:1px solid #30363d;font-size:.94rem;cursor:pointer;font-family:inherit;
+  transition:transform .1s ease}
+.slot:active{transform:scale(.98)}
 /* ── PLAN section — deep dark glass, ClickUp-inspired cards (round-7) ── */
-.plan-card{display:flex;align-items:flex-start;gap:14px;padding:18px 16px;min-height:70px;
-  background:rgba(22,27,34,.6);border:1px solid rgba(48,54,61,.5);border-radius:20px;
-  margin-bottom:12px;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.plan-card{display:flex;align-items:flex-start;gap:14px;padding:1rem;min-height:70px;
+  background:#161b22;border:1px solid #30363d;border-radius:20px;
+  margin-bottom:12px;box-shadow:0 6px 20px rgba(0,0,0,.4);
+  transition:transform .1s ease}
+.plan-card:active{transform:scale(.98)}
 .plan-card:last-child{margin-bottom:0}
-.plan-card .title{font-size:1.18rem;color:#e6edf3;line-height:1.4;font-weight:650;
+.plan-card .title{font-size:1.18rem;color:#f0f6fc;line-height:1.5;font-weight:650;
   word-wrap:break-word;overflow-wrap:break-word;word-break:break-word}
 .plan-card .ctx{font-size:.84rem;color:#8b949e;margin-top:5px;word-wrap:break-word;overflow-wrap:break-word}
 .plan-card .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 .plan-book{min-height:52px;padding:0 16px;border-radius:16px;background:rgba(35,134,54,.82);
-  color:#fff;font-size:.98rem;font-weight:650;border:none;cursor:pointer;font-family:inherit}
-.plan-note{font-size:.8rem;color:#8b949e;border:1px solid rgba(210,153,34,.4);
-  background:rgba(210,153,34,.1);border-radius:12px;padding:10px 12px;margin-top:8px}
+  color:#fff;font-size:.98rem;font-weight:650;border:none;cursor:pointer;font-family:inherit;
+  transition:transform .1s ease}
+.plan-book:active{transform:scale(.98)}
+.plan-note{font-size:.8rem;color:#8b949e;border:1px solid #30363d;
+  background:rgba(210,153,34,.08);border-radius:12px;padding:10px 12px;margin-top:8px}
 /* ── inputs ── */
 input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
   border:1px solid rgba(48,54,61,.5);border-radius:14px;color:#e6edf3;padding:14px;
@@ -322,18 +342,27 @@ function renderDecide(d){
       : emptyBlock('You cleared the deck — nice.','Nothing’s queued for a decision, and nothing’s coming up.');
   } else {
     out = d.decisions.map(function(dc){
+      // ROUND-9: enforce left-align at the INJECTION POINT — the JS builder
+      // must set this inline so it persists across re-renders (CSS alone was
+      // overridden). padding:1rem, line-height:1.5, faint isolate background.
       var optsHtml = (dc.options&&dc.options.length)
         ? dc.options.map(function(opt, i){
             var isLean = dc.has_lean && dc.lean && (opt===dc.lean || opt.indexOf(dc.lean)===0 || dc.lean.indexOf(opt)===0);
-            return '<button class="btn btn-sm '+(isLean?'btn-go':'btn-pick')+'" data-act="choose" data-path="'+esc(dc.path)+'" data-opt="'+esc(opt)+'">'+(isLean?'✓ ':'')+'Option '+(i+1)+': '+esc(opt)+'</button>';
+            return '<button class="btn btn-sm '+(isLean?'btn-go':'btn-pick')+'" ' +
+              'data-act="choose" data-path="'+esc(dc.path)+'" data-opt="'+esc(opt)+'" ' +
+              'style="text-align:left;justify-content:flex-start;width:100%;line-height:1.5;padding:0.8rem 1rem;white-space:normal">' +
+              (isLean?'✓ ':'')+'Option '+(i+1)+': '+esc(opt)+'</button>';
           }).join('')
-        : '<button class="btn btn-go btn-sm" data-act="accept" data-path="'+esc(dc.path)+'">'+(dc.has_lean?'Go with “'+esc(dc.lean)+'”':'Decided — done')+'</button>';
+        : '<button class="btn btn-go btn-sm" data-act="accept" data-path="'+esc(dc.path)+'" ' +
+          'style="text-align:left;justify-content:flex-start;width:100%">'+
+          (dc.has_lean?'Go with “'+esc(dc.lean)+'”':'Decided — done')+'</button>';
       var dateLine = dc.decide_by ? '<div class="ctx">decide by '+esc(dc.decide_by)+'</div>' : '';
-      var escapeLine = '<button class="btn btn-sm btn-bare" data-act="rebase" data-path="'+esc(dc.path)+'">Not today — change the date</button>';
-      return '<div class="item decision"><div class="body">' +
-        '<div class="ctx" style="color:#d29922;margin-bottom:2px">your call:</div>' +
-        '<div class="title">'+esc(dc.title)+'</div>' + dateLine +
-        '<div class="slots" style="flex-direction:column;align-items:stretch;margin-top:10px">'+optsHtml+'</div>' +
+      var escapeLine = '<button class="btn btn-sm btn-bare" data-act="rebase" data-path="'+esc(dc.path)+'" style="text-align:left;width:100%">Not today — change the date</button>';
+      return '<div class="item decision" style="text-align:left;align-items:flex-start;padding:1rem;line-height:1.5;background:rgba(255,255,255,0.03)">' +
+        '<div class="body">' +
+        '<div class="ctx" style="color:#d29922;margin-bottom:2px;text-align:left">your call:</div>' +
+        '<div class="title" style="text-align:left">'+esc(dc.title)+'</div>' + dateLine +
+        '<div class="slots" style="flex-direction:column;align-items:stretch;margin-top:10px;justify-content:flex-start">'+optsHtml+'</div>' +
         escapeLine + '</div></div>';
     }).join('');
   }
