@@ -321,18 +321,30 @@ function plate_full(){ return plate.length >= 3; }
 /* ROUND-8 iOS-lag cache + ROUND-12 local plate mirror */
 var _openCache = null;   // last /api/open payload (items + plate)
 
-/* ROUND-12 fix#1: plate persistence across view switches. The plate lives
-   vault-side (02 Planner/_ Active Plate) and /api/open returns it. We ALSO
-   keep a localStorage mirror so a returning view never rebuilds empty, even
-   if the refetch is pending. */
+/* ROUND-12 fix#1 + ROUND-13: plate persistence across view switches.
+   Server (02 Planner/_ Active Plate) is AUTHORITATIVE. localStorage is only
+   a best-effort cache to avoid a rebuild-empty flash — it must NEVER overrule
+   the server or block a pick. */
 function plateLS(){ try { return localStorage.getItem('cockpit_plate')||''; } catch(e){ return ''; } }
 function savePlateLS(){ try { localStorage.setItem('cockpit_plate', JSON.stringify(plate)); } catch(e){} }
 
 function renderPick(d){
   _openCache = d;
-  var restored = (d.plate && d.plate.length) ? d.plate
-    : plateLS() ? (JSON.parse(plateLS())||[]) : [];
-  plate = restored;
+  var server_plate = (d.plate && d.plate.length) ? d.plate : [];
+  // local fallback ONLY if server plate is empty AND every cached path is one
+  // of the currently-open items (never ghost/phantom picks resurrecting).
+  var restored = server_plate;
+  if (!server_plate.length && plateLS()){
+    try {
+      var ls = JSON.parse(plateLS())||[];
+      var live = {}; for (var li=0; li<(d.items?d.items.length:0); li++) live[d.items[li].path]=1;
+      // keep only cached paths that still exist in the open list
+      ls = ls.filter(function(p){ return p && live[p]; });
+      if (ls.length) restored = ls;
+      else localStorage.removeItem('cockpit_plate');
+    } catch(e){ /* corrupt cache — ignore */ }
+  }
+  plate = restored.slice();
   if (d.items){ // re-flag on_plate from the resolved plate so lanes are right
     for (var pi=0; pi<d.items.length; pi++){
       d.items[pi].on_plate = plate.indexOf(d.items[pi].path) !== -1;
@@ -463,6 +475,29 @@ function flipPlate(path, add){
   document.getElementById('plateCount').textContent = plate.length;
 }
 
+/* ROUND-13 (pick-persist bug): PERSIST the plate to the server and make the
+   write authoritative. The POST is awaited + error-surfaced (NOT fire-and-
+   forget — a silent 401/network drop was losing picks while the optimistic
+   UI claimed they were saved). On success we reload the real plate from the
+   server so the view always matches 02 Planner/_ Active Plate. */
+function savePick(paths){
+  var snapshot = (paths||[]).slice();
+  api('/api/plate',{method:'POST',body:{paths:snapshot}}).then(function(r){
+    // server returned the persisted plate -> trust it (authoritative)
+    if (r && r.plate){
+      plate = r.plate.slice();
+      if (_openCache){ _openCache.plate = r.plate.slice(); _openCache.plate_full = r.plate.length>=3; }
+      savePlateLS();
+      renderPick(_openCache);
+      document.getElementById('plateCount').textContent = plate.length;
+    } else {
+      alert('Couldn’t save your plate — try again.');
+    }
+  }).catch(function(){
+    alert('Couldn’t save your plate — check the connection and try again.');
+  });
+}
+
 function load(area){
   area = area || ACTIVE_TAB; ACTIVE_TAB = area;
   if (area==='pick'){
@@ -559,8 +594,14 @@ document.addEventListener('click', function(ev){
   var act = b.dataset.act, path = b.dataset.path;
   if (act==='pick'){
     if (plate_full()){ alert('Your plate is full — finish one of the 3 first.'); return; }
-    flipPlate(path, true);               // instant local (iOS-lag fix)
-    api('/api/plate',{method:'POST',body:{paths:plate}});  // background sync
+    // optimistic local flip first (0ms), then PERSIST to the server (the plate
+    // file is authoritative — a fire-and-forget write that 401s/errors would
+    // silently lose the pick while the UI looks done). Await + surface errors.
+    flipPlate(path, true);
+    savePick(plate);
+  } else if (act==='deselect'){
+    flipPlate(path, false);
+    savePick(plate);
   } else if (act==='edittask'){
     // ROUND-12 fix#3: tap the task name -> editable inline input
     var cur = b.textContent;
@@ -594,9 +635,6 @@ document.addEventListener('click', function(ev){
     var saved = false;
     input.addEventListener('keydown', onKey);
     input.addEventListener('blur', function(){ done(true); });
-  } else if (act==='deselect'){
-    flipPlate(path, false);              // instant local (iOS-lag fix)
-    api('/api/plate',{method:'POST',body:{paths:plate}});  // background sync
   } else if (act==='done'){
     // ROUND-11 fix#3: 0ms optimistic — flip the row to Done on screen NOW,
     // bump the counter locally, THEN sync to the vault in the background so
