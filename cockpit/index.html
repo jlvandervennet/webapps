@@ -462,16 +462,22 @@ function renderPlan(r){
   var items = r.items||[];
   if (!items.length || (r.plate_count||0) === 0){
     document.getElementById('planBody').innerHTML =
-      emptyBlock('Pick your 3 first','Get 1–3 on your plate, then I’ll find open times and block them here.');
+      '<div class="plan-note" style="margin-bottom:10px">Plan only schedules what’s already on your plate.</div>' +
+      emptyBlock('Nothing on your plate yet',
+        'Pick 1–3 tasks on the Pick tab first, then come back here to block the time. You can’t re-plan here by design.');
     return;
   }
-  var html = items.map(function(it){
+  // ROUND-16: Plan is LOCKED to the plate — it only schedules the tasks already
+  // picked. No re-pick/re-plan affordance here; changing what’s planned goes
+  // through the explicit Pick-tab edit (that IS the edit function).
+  var html = '<div class="plan-note" style="margin-bottom:10px">Scheduling what’s on your plate. Change your pick on the Pick tab.</div>' +
+    items.map(function(it){
     // round-7: ClickUp-inspired plan cards matching the glass dark theme
     var slots = it.found ? it.slots.map(function(sl){
       return '<button class="plan-book" data-act="book" data-title="'+esc(it.title)+'" data-date="'+sl.date+'" data-start="'+sl.start+'" data-end="'+sl.end+'">'+esc(sl.label)+'</button>';
     }).join('') : '<div class="plan-note">No suggestion this week — set your own time below.</div>';
     var override =
-      '<div class="plan-note" style="margin-top:4px">…or set your own time</div>' +
+      '<div class="plan-note" style="margin-top:4px">Edit: set your own time instead</div>' +
       '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">' +
       '<input type="date" id="own-day-'+esc(it.idx)+'" style="flex:1 1 130px">' +
       '<input type="time" id="own-start-'+esc(it.idx)+'" style="flex:0 0 100px" value="10:00">' +
