@@ -40,6 +40,26 @@ body{font-family:system-ui,-apple-system,'Segoe UI',BlinkMacSystemFont,sans-seri
   border-radius:22px;box-shadow:0 10px 30px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.02)}
 .glass-strong{background:rgba(22,27,34,.72);backdrop-filter:blur(24px) saturate(1.2);
   border:1px solid rgba(88,166,255,.28);border-radius:24px;box-shadow:0 14px 38px rgba(0,0,0,.5)}
+/* ── ROUND-14: custom confirm modal (replaces window.confirm) ── */
+.modal{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+  padding:24px;background:rgba(0,0,0,.6);-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.modal.modal-active{display:flex}
+.modal-box{width:100%;max-width:420px;background:#161b22;border:1px solid #30363d;
+  border-radius:12px;padding:26px 22px 20px;box-shadow:0 18px 48px rgba(0,0,0,.55)}
+.modal-title{font-size:1.25rem;font-weight:700;color:#f0f6fc;margin-bottom:10px;letter-spacing:-.2px}
+.modal-msg{font-size:1.04rem;line-height:1.45;color:#f0f6fc;text-align:left;
+  word-wrap:break-word;overflow-wrap:break-word;margin-bottom:8px}
+.modal-detail{font-size:.9rem;color:#8b949e;text-align:left;margin-bottom:20px}
+.modal-actions{display:flex;gap:10px}
+.modal-btn{flex:1;min-height:52px;border-radius:12px;font-size:1.05rem;font-weight:600;
+  border:1px solid #30363d;font-family:inherit;transition:transform .1s ease}
+.modal-btn:active{transform:scale(.98)}
+.modal-bt-cancel{background:#21262d;color:#8b949e}
+.modal-bt-confirm{background:rgba(88,166,255,.22);color:#58a6ff;
+  border-color:rgba(88,166,255,.55)}
+@media (max-width:380px){
+  .modal-actions{flex-direction:column}
+}
 /* ── HEADER ── */
 header{display:flex;align-items:center;justify-content:space-between;padding:6px 6px 0}
 h1{font-size:1.55rem;letter-spacing:-.3px;font-weight:700;color:#f0f6fc;text-shadow:0 2px 14px rgba(0,0,0,.5)}
@@ -172,6 +192,19 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 </style>
 </head>
 <body>
+
+<!-- ROUND-14 custom confirm modal (replaces window.confirm). Hidden by default. -->
+<div id="confirmModal" class="modal" aria-hidden="true">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div id="confirmTitle" class="modal-title">Add to calendar?</div>
+    <div id="confirmMsg" class="modal-msg"></div>
+    <div id="confirmDetail" class="modal-detail"></div>
+    <div class="modal-actions">
+      <button id="confirmCancel" class="modal-btn modal-bt-cancel" data-act="confirmdismiss">Cancel</button>
+      <button id="confirmOk" class="modal-btn modal-bt-confirm" data-act="confirmok">Book It</button>
+    </div>
+  </div>
+</div>
 
 <header>
   <h1>Joe's Cockpit</h1>
@@ -587,11 +620,41 @@ function showUndo(path, title){
 }
 
 /* ── actions ── */
+/* ROUND-14: custom confirm modal — replaces window.confirm. confirmDialog sets the
+   message + stashes the ok callback; Confirm/Book It fires it, any dismiss clears. */
+var _confirmOk = null;
+function confirmDialog(title, msg, detail, okFn){
+  document.getElementById('confirmTitle').textContent = title || 'Are you sure?';
+  document.getElementById('confirmMsg').textContent = msg || '';
+  document.getElementById('confirmDetail').textContent = detail || '';
+  _confirmOk = okFn || null;
+  var m = document.getElementById('confirmModal');
+  m.classList.add('modal-active'); m.setAttribute('aria-hidden','false');
+  document.getElementById('confirmOk').focus();
+}
+function dismissConfirm(){
+  document.getElementById('confirmModal').classList.remove('modal-active');
+  document.getElementById('confirmModal').setAttribute('aria-hidden','true');
+  _confirmOk = null;
+}
+
+/* Backdrop tap = cancel (native-like), does not fire the ok callback. */
+document.getElementById('confirmModal').addEventListener('click', function(ev){
+  if (ev.target === this){ dismissConfirm(); }
+}, true);
+
 document.addEventListener('click', function(ev){
   var b = ev.target.closest('[data-act]');
   if (b && b.dataset.act) zap();           // tactile on any control tap
   if (!b) return;
   var act = b.dataset.act, path = b.dataset.path;
+  if (act==='confirmok'){
+    var fn = _confirmOk; dismissConfirm();     // 0ms dismiss, then act
+    if (fn) fn();
+    return;
+  } else if (act==='confirmdismiss'){
+    dismissConfirm(); return;
+  }
   if (act==='pick'){
     if (plate_full()){ alert('Your plate is full — finish one of the 3 first.'); return; }
     // optimistic local flip first (0ms), then PERSIST to the server (the plate
@@ -707,13 +770,22 @@ document.addEventListener('click', function(ev){
     });
   } else if (act==='book'){
     var title=b.dataset.title,date=b.dataset.date,start=b.dataset.start,end=b.dataset.end;
-    if(!confirm('Add “'+title+'” '+date+' '+start+'–'+end+' to your calendar?')) return;
-    // 0ms optimistic: mark the slot booked on screen NOW, sync in background
-    b.textContent = '✓ Booked'; b.disabled = true;
-    b.style.opacity = .6;
-    api('/api/book',{method:'POST',body:{summary:title,start:date+'T'+start,end:date+'T'+end}}).then(function(r){
-      if(!r.ok){ b.textContent = 'Book again'; b.disabled=false; b.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
-    });
+    // ROUND-14: custom modal replaces window.confirm (native popup was jarring on iOS).
+    // Show the modal; the Confirm button resolves bookConfirmed() below (0ms dismiss
+    // then books). Last book attempt is stashed on the element for the modal handler.
+    var btn=b;
+    confirmDialog('Add to calendar?',
+      'Add "'+title+'" to your calendar?',
+      date+' · '+start+'–'+end,
+      function(){
+        // 0ms optimistic: mark the slot booked on screen NOW, sync in background
+        var target=btn;
+        target.textContent = '✓ Booked'; target.disabled = true;
+        target.style.opacity = .6;
+        api('/api/book',{method:'POST',body:{summary:title,start:date+'T'+start,end:date+'T'+end}}).then(function(r){
+          if(!r.ok){ target.textContent = 'Book again'; target.disabled=false; target.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
+        });
+      });
   } else if (act==='bookown'){
     var t=b.dataset.title, ix=b.dataset.idx;
     var day=document.getElementById('own-day-'+ix).value;
