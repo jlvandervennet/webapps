@@ -84,6 +84,14 @@ nav{margin-top:22px}
   word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;
   overflow:hidden;display:block;min-height:1.4em}
 .item .ctx{font-size:.84rem;color:#8b949e;margin-top:4px;word-wrap:break-word;overflow-wrap:break-word}
+/* ROUND-12 fix#3: tap-to-edit task name */
+.etitle{font-size:1.18rem;color:var(--text-primary);line-height:1.4;font-weight:600;
+  display:inline-block;word-wrap:break-word;overflow-wrap:break-word;word-break:break-word;
+  cursor:text;text-decoration:none;border-bottom:1px dotted transparent}
+.etitle:hover,.etitle:focus{outline:none;border-bottom:1px dotted var(--border-subtle);color:var(--text-primary)}
+.edit-input{font-size:1.18rem;color:var(--text-primary);background:var(--bg-hover);
+  border:1px solid var(--accent-focus);border-radius:10px;padding:2px 10px;min-height:46px;
+  font-family:inherit;line-height:1.4;width:100%;outline:none}
 .item .actions{display:flex;flex-direction:column;gap:8px;flex:0 0 auto}
 .item.is-active{background:var(--bg-hover);border:1px solid var(--accent-focus)}
 /* ── BUTTONS ≥50px touch targets (premium: slate, thin, scale .98 press) ── */
@@ -152,6 +160,14 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 .bump-sheet #bumpDate{flex:1 1 150px}
 .bump-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
 .bump-hint{font-size:.78rem;color:var(--text-muted)}
+/* ROUND-12 fix#2: Undo toast */
+.undo-toast{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom) + 20px);z-index:60;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  margin:0 12px;padding:16px 16px;border-radius:16px;
+  background:rgba(22,27,34,.92);border:1px solid var(--border-subtle);
+  box-shadow:0 10px 28px rgba(0,0,0,.55);animation:toast-in .25s ease}
+.undo-msg{flex:1;font-size:.95rem;color:var(--text-primary);word-wrap:break-word;overflow-wrap:break-word}
+@keyframes toast-in{from{transform:translateY(18px);opacity:0}to{transform:translateY(0);opacity:1}}
 @media (min-width:700px){ body{font-size:1rem} }
 </style>
 </head>
@@ -213,6 +229,12 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 </div>
 
 <p class="footer">Joe's Cockpit · thin window over the vault</p>
+
+<!-- ROUND-12 fix#2: Undo toast (fades after ~5s) -->
+<div id="undoToast" class="undo-toast" style="display:none" role="status" aria-live="polite">
+  <span class="undo-msg">Task completed</span>
+  <button class="btn btn-sm btn-go" data-act="undo" data-path="">Undo</button>
+</div>
 
 <script>
 var AUTH = localStorage.getItem('cockpit_auth') || '';
@@ -290,19 +312,33 @@ function itemCard(it, fresh){
           '<button class="btn btn-go btn-sm" data-act="done" data-path="'+esc(it.path)+'">Done</button>';
   }
   return '<div class="item'+ (onPlate?' is-active':'') + (fresh?' done-pop':'') +'">' +
-    '<div class="body"><div class="title">'+esc(it.title)+'</div>' +
+    '<div class="body"><span class="etitle" data-act="edittask" data-path="'+esc(it.path)+'" role="button" tabindex="0">'+esc(it.title)+'</span>' +
     (ctx.length?'<div class="ctx">'+ctx.join(' · ')+'</div>':'') + '</div>' +
     '<div class="actions">'+act+'</div></div>';
 }
 function plate_full(){ return plate.length >= 3; }
 
-/* ── ROUND-8 iOS-lag: cache last /api/open + light re-render on a single
-   toggle, instead of re-fetching + rebuilding the whole list on every change */
-var _openCache = null;   // {items, plate, plate_full} from the last fetch
+/* ROUND-8 iOS-lag cache + ROUND-12 local plate mirror */
+var _openCache = null;   // last /api/open payload (items + plate)
+
+/* ROUND-12 fix#1: plate persistence across view switches. The plate lives
+   vault-side (02 Planner/_ Active Plate) and /api/open returns it. We ALSO
+   keep a localStorage mirror so a returning view never rebuilds empty, even
+   if the refetch is pending. */
+function plateLS(){ try { return localStorage.getItem('cockpit_plate')||''; } catch(e){ return ''; } }
+function savePlateLS(){ try { localStorage.setItem('cockpit_plate', JSON.stringify(plate)); } catch(e){} }
 
 function renderPick(d){
   _openCache = d;
-  plate = d.plate || [];
+  var restored = (d.plate && d.plate.length) ? d.plate
+    : plateLS() ? (JSON.parse(plateLS())||[]) : [];
+  plate = restored;
+  if (d.items){ // re-flag on_plate from the resolved plate so lanes are right
+    for (var pi=0; pi<d.items.length; pi++){
+      d.items[pi].on_plate = plate.indexOf(d.items[pi].path) !== -1;
+    }
+  }
+  savePlateLS();
   var items = d.items || [];
   var active = items.filter(function(x){ return x.on_plate; });
   var rest = items.filter(function(x){ return !x.on_plate; });
@@ -421,6 +457,8 @@ function flipPlate(path, add){
   }
   plate = add ? (plate.indexOf(path)<0 ? plate.concat([path]) : plate)
               : plate.filter(function(p){ return p!==path; });
+  if (_openCache){ _openCache.plate = plate.slice(); _openCache.plate_full = plate.length>=3; }
+  savePlateLS();                         // ROUND-12: persist locally too
   renderPick(_openCache);                // light rebuild from cache (no fetch)
   document.getElementById('plateCount').textContent = plate.length;
 }
@@ -501,6 +539,18 @@ function submitQuick(){
   });
 }
 
+/* ROUND-12 fix#2: Undo toast — shows after a completion, auto-dismisses ~5s */
+var _undoTimer = null;
+function showUndo(path, title){
+  var t = document.getElementById('undoToast');
+  if (!t) return;
+  t.querySelector('[data-act="undo"]').dataset.path = path;
+  t.querySelector('.undo-msg').textContent = 'Completed: ' + (title||'task');
+  t.style.display = 'flex';
+  if (_undoTimer) clearTimeout(_undoTimer);
+  _undoTimer = setTimeout(function(){ t.style.display = 'none'; }, 5000);
+}
+
 /* ── actions ── */
 document.addEventListener('click', function(ev){
   var b = ev.target.closest('[data-act]');
@@ -511,6 +561,39 @@ document.addEventListener('click', function(ev){
     if (plate_full()){ alert('Your plate is full — finish one of the 3 first.'); return; }
     flipPlate(path, true);               // instant local (iOS-lag fix)
     api('/api/plate',{method:'POST',body:{paths:plate}});  // background sync
+  } else if (act==='edittask'){
+    // ROUND-12 fix#3: tap the task name -> editable inline input
+    var cur = b.textContent;
+    var input = document.createElement('input');
+    input.type = 'text'; input.value = cur;
+    input.className = 'edit-input';
+    input.setAttribute('aria-label', 'Task name');
+    var wrap = document.createElement('span');
+    wrap.appendChild(input);
+    b.replaceWith(wrap);
+    input.focus();
+    var done = function(save){
+      if (saved) return;                 // never double-save (Enter + blur)
+      saved = true;
+      var val = (input.value||'').trim();
+      if (save && val && val !== cur){
+        // persist via the vault-safe rename endpoint
+        api('/api/rename',{method:'POST',body:{path:path, title:val}}).then(function(r){
+          if (r && r.ok){ load('pick'); }
+          else { alert((r&&r.output)||'Couldn’t rename that.'); load('pick'); }
+        });
+      } else {
+        load('pick');
+      }
+    };
+    var onKey = function(e){
+      if (e.key === 'Enter'){ done(true); }
+      else if (e.key === 'Escape'){ done(false); }
+    };
+    // guard: Enter triggers save; blur may fire after — never double-save
+    var saved = false;
+    input.addEventListener('keydown', onKey);
+    input.addEventListener('blur', function(){ done(true); });
   } else if (act==='deselect'){
     flipPlate(path, false);              // instant local (iOS-lag fix)
     api('/api/plate',{method:'POST',body:{paths:plate}});  // background sync
@@ -532,14 +615,20 @@ document.addEventListener('click', function(ev){
     }
     // background sync
     api('/api/done',{method:'POST',body:{path:path}}).then(function(r){
-      if (r && r.ok){ load(); refreshCounter(); }
+      if (r && r.ok){
+        showUndo(path, r.title || 'task');   // ROUND-12 fix#2: Undo toast
+        load(); refreshCounter();
+      }
       else if (r && r.deduped){ load(); refreshCounter(); }
       else { alert((r&&r.output) || 'Couldn’t mark that done.'); load(); }
     });
-  } else if (act==='choose'){
-    var opt = b.dataset.opt;
-    if (opt && !confirm('Go with: ' + opt)) return;
-    api('/api/resolve',{method:'POST',body:{path:path, chosen:opt||''}}).then(function(){ load('decide'); refreshCounter(); });
+  } else if (act==='undo'){
+    // ROUND-12 fix#2: reverse a completion — reopen the task + remove its /done
+    api('/api/undone',{method:'POST',body:{path:path}}).then(function(r){
+      if (r && r.ok){ load('pick'); refreshCounter(); }
+      else if (r && r.not_done){ load('pick'); refreshCounter(); }
+      else { alert((r&&r.output) || 'Couldn’t undo that.'); load('pick'); }
+    });
   } else if (act==='accept'){
     api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); });
   } else if (act==='resolve'){

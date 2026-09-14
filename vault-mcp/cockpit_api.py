@@ -342,6 +342,76 @@ def add_quick_task(text):
         return {"ok": False, "output": str(e)}
 
 
+def rename_task(path, new_title):
+    """Inline-rename a task (round-12). Original-Text-safe via
+    vaultlib.rename_task: updates title + H1 + checkbox line only, never body
+    prose. Returns the write trace so the UI can reflect it."""
+    try:
+        r = vaultlib.rename_task(path, new_title)
+        return {"ok": True, "path": r["path"], "old": r["old"],
+                "title": r["title"], "output": "Renamed ✔"}
+    except (ValueError, FileNotFoundError) as e:
+        return {"ok": False, "output": "Couldn't rename that task."}
+
+
+def revert_done(path):
+    """Undo a completion (round-12): reopen the task + remove its /done log.
+
+    What Undo does: flips the note status done->open (via vaultlib), removes
+    the matching completion row from the cumulative completions.jsonl, and
+    strips the matching `- HH:MM — <title>` line from today's daily ✅ Done,
+    so the task returns to the open list and the counter drops back by one.
+    """
+    out = {"ok": False, "path": path}
+    try:
+        note = vaultlib.read_note(path)
+    except Exception:
+        return {**out, "output": "Couldn't find that task to undo."}
+    title = (note.get("frontmatter", {}).get("title") or "").strip()
+    before = str(note.get("frontmatter", {}).get("status") or "").lower()
+    if before != "done":
+        return {**out, "output": "That task isn't marked done.", "not_done": True}
+    # 1) reopen the note
+    try:
+        vaultlib.set_frontmatter(path, {"status": "open"})
+    except Exception:
+        return {**out, "output": "Couldn't reopen the task."}
+    removed_lines, removed_daily = 0, False
+    # 2) remove matching completion rows (exact title) from the cumulative log
+    try:
+        if DONE_LOG.is_file():
+            lines = [l for l in DONE_LOG.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+            keep = []
+            for l in lines:
+                try:
+                    rec = json.loads(l)
+                    if rec.get("task") == title:
+                        removed_lines += 1
+                        continue
+                except json.JSONDecodeError:
+                    pass
+                keep.append(l)
+            DONE_LOG.write_text("\n".join(keep) + ("\n" if keep else ""), encoding="utf-8")
+    except OSError:
+        pass
+    # 3) strip the matching daily ✅ Done line (best-effort, exact title match)
+    try:
+        daily = VAULT / "00 Daily Scratchpad" / ("%s.md" % TODAY)
+        if daily.is_file():
+            txt = daily.read_text(encoding="utf-8", errors="replace")
+            kept = [l for l in txt.splitlines()
+                    if not (l.strip().startswith("- ") and title.strip() and
+                            ("— " + title) in l)]
+            if len(kept) != len(txt.splitlines()):
+                removed_daily = True
+                daily.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+    return {**out, "ok": True, "output": "Undone — task reopened.",
+            "removed_log_lines": removed_lines, "removed_daily": removed_daily,
+            "title": title}
+
+
 def resolve_decision(path, resolution="resolved", chosen=None):
     """Close a decision: decision:resolved + awaiting:none (via vaultlib).
 
@@ -575,6 +645,10 @@ class Handler(BaseHTTPRequestHandler):
             ctype = "text/css"
         elif p.suffix == ".json":
             ctype = "application/manifest+json"
+        elif p.suffix == ".png":
+            ctype = "image/png"
+        elif p.suffix == ".svg":
+            ctype = "image/svg+xml"
         body = p.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", ctype)
@@ -625,6 +699,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/add":
                 return _json(self, add_quick_task(data.get("text", "")))
+            if parsed.path == "/api/rename":
+                return _json(self, rename_task(data["path"], data.get("title", data.get("new_title", ""))))
+            if parsed.path == "/api/undone":
+                return _json(self, revert_done(data["path"]))
             if parsed.path == "/api/set-due":
                 return _json(self, set_due(data["path"], data["due"]))
             if parsed.path == "/api/plate":

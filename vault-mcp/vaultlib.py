@@ -315,6 +315,52 @@ def create_open_task(text: str) -> dict:
             "title": title, "created": _date.today().isoformat()}
 
 
+def rename_task(rel: str, new_title: str) -> dict:
+    """Rename an open-task note (round-12 inline edit), Original-Text-safe.
+
+    Updates ONLY:
+      - frontmatter `title` (GL-002 key),
+      - the body's first H1 line (`# <old>`) IF it exactly matches the old title,
+      - the body's first task checkbox line (`- [ ] <old>`) IF it matches.
+    NEVER touches body prose (CLAUDE.md hard rule #1). Used by the cockpit
+    inline-edit so a rename is genuinely vault-canonical, not a local-only swap.
+    """
+    p = _resolve_vault_path(rel)
+    if not p.is_file():
+        raise FileNotFoundError("no such note: %s" % rel)
+    title = (new_title or "").strip()
+    if not title:
+        raise ValueError("empty title")
+    text = p.read_text(encoding="utf-8", errors="replace")
+    if not text.startswith(FM_OPEN + "\n"):
+        raise ValueError("note has no frontmatter; rename requires one")
+    fm, body = split_frontmatter(text)
+    old_title = (fm.get("title") or "").strip() or ""
+    # 1) update frontmatter title
+    fm["title"] = title
+    fm_lines = [_format_fm_value(k, v) for k, v in fm.items()]
+    new_text = FM_OPEN + "\n" + "\n".join(fm_lines) + "\n" + FM_CLOSE + "\n\n"
+
+    # 2) reflect in the checkbox line and H1, ONLY if they exactly match the
+    #    old title — never rewrite body prose or other lines.
+    def _replace_first(s: str, old_hunk: str, new_hunk: str) -> tuple[str, bool]:
+        i = s.find(old_hunk)
+        if i == -1:
+            return s, False
+        return s[:i] + new_hunk + s[i + len(old_hunk):], True
+
+    if old_title:
+        body, changed_h1 = _replace_first(body, "# " + old_title, "# " + title)
+    else:
+        changed_h1 = False
+    body, changed_check = _replace_first(body, "- [ ] " + old_title, "- [ ] " + title)
+
+    p.write_text(new_text + body, encoding="utf-8")
+    return {"path": str(p.relative_to(VAULT_ROOT)), "old": old_title,
+            "title": title, "updated_checkbox": changed_check,
+            "updated_h1": changed_h1}
+
+
 def get_joe_decisions() -> list:
     """All inbox notes awaiting Joe with decision open."""
     out = []
