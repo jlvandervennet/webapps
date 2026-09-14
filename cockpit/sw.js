@@ -3,7 +3,7 @@
 // reaches the device; cache is only an offline fallback. API calls pass
 // through untouched (network-only, no caching). Static assets (icons) are
 // cache-first. CACHE version is bumped each deploy to invalidate stale shell.
-const CACHE = "cockpit-v6";
+const CACHE = "cockpit-v7";
 const SHELL = ["/", "/index.html", "/manifest.json"];
 
 self.addEventListener("install", (e) => {

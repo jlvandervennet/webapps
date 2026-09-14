@@ -154,6 +154,16 @@ nav{margin-top:22px}
 .plan-expand:active{transform:scale(.98);color:#f0f6fc;border-color:#58a6ff}
 .plan-more{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
 .plan-more[hidden]{display:none}
+/* ROUND-18: locked/scheduled card — non-interactive badge, editable title. */
+.plan-card-locked{opacity:1}
+.plan-badge{display:inline-flex;align-items:center;gap:6px;margin-top:8px;
+  padding:10px 14px;border-radius:12px;background:#161b22;border:1px solid #30363d;
+  color:#58a6ff;font-size:.92rem;font-weight:600;letter-spacing:.2px}
+.plan-title.tappable{cursor:pointer;border-bottom:1px dashed transparent;
+  transition:border-color .1s ease}
+.plan-title.tappable:active{border-bottom-color:#58a6ff;color:#58a6ff}
+.plan-edit-input{background:rgba(13,17,23,.6);border:1px solid #58a6ff;
+  border-radius:10px;color:#f0f6fc;padding:10px 12px;font-size:1rem;width:100%;font-family:inherit}
 .plan-note{font-size:.8rem;color:#8b949e;border:1px solid #30363d;
   background:rgba(210,153,34,.08);border-radius:12px;padding:10px 12px;margin-top:8px}
 /* ── inputs ── */
@@ -483,8 +493,18 @@ function renderPlan(r){
   // "Book it" for the lean (best/earliest free slot). Alternate times + custom
   // edit are tucked behind explicit expanders — a deliberate second step Joe
   // opts into, never three options on load. Nothing removed, just re-ordered.
-  var html = '<div class="plan-note" style="margin-bottom:10px">Scheduling what’s on your plate. Change your pick on the Pick tab.</div>' +
+  var html = '<div class="plan-note" style="margin-bottom:10px">Scheduling what\u2019s on your plate. Change your pick on the Pick tab.</div>' +
     items.map(function(it){
+      // ROUND-18: if this task already has a scheduled event, LOCK the card —
+      // hide the slot chips + Book it entirely, show a non-interactive badge.
+      if (it.locked){
+        var bookedslot = it.booked_label || '';
+        return '<div class="plan-card plan-card-locked"><div class="body">' +
+          '<div class="title plan-title tappable" data-act="planedittitle" data-path="'+esc(it.path||'')+'" data-title="'+esc(it.title)+'" data-event="'+esc(it.event_id||'')+'">'+esc(it.title)+'</div>' +
+          '<div class="plan-badge">\u2713 Booked for '+esc(bookedslot)+'</div>' +
+          '<div class="plan-note" style="margin-top:6px">Tap the task name to edit it \u2014 syncs to your calendar.</div>' +
+          '</div></div>';
+      }
       var slots = it.slots || [];
       var lean = slots[0];                       // best/earliest free slot
       // PRIMARY: one confirmable suggestion.
@@ -824,6 +844,54 @@ document.addEventListener('click', function(ev){
           if(!r.ok){ target.textContent = 'Book again'; target.disabled=false; target.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
         });
       });
+  } else if (act==='planedittitle'){
+    // ROUND-18: inline title edit on a locked task. Tap header -> input; Enter/blur
+    // saves the new title to the vault (safe rename) then PATCHes the matching Google
+    // event's summary in real time.
+    var cur = b.dataset.title;
+    var path = b.dataset.path;
+    var eventId = b.dataset.event;
+    var wrap = document.createElement('span');
+    var input = document.createElement('input');
+    input.type = 'text'; input.value = cur;
+    input.className = 'plan-edit-input';
+    input.setAttribute('autocorrect','off'); input.setAttribute('autocapitalize','sentences');
+    var saved = false;
+    var commit = function(){
+      if (saved) return;
+      saved = true;
+      var val = (input.value||'').trim();
+      if (!val){ b.replaceWith(b); }
+      else if (val === cur){ /* unchanged — no-op */ }
+      else {
+        // 1) vault rename (Original-Text-safe)
+        api('/api/rename',{method:'POST',body:{path:path,title:val}}).then(function(r){
+          if (r && r.ok){
+            b.textContent = val;
+            load('plan');
+          } else {
+            alert((r&&r.output)||'Couldn\u2019t rename that.');
+            b.textContent = cur;
+          }
+          // 2) real-time gcal PATCH (best-effort, never blocks the rename)
+          if (eventId && val !== cur){
+            api('/api/calendar/update',{method:'POST',body:{event_id:eventId,new_title:val}})
+              .then(function(ur){ if(ur && !ur.ok){ /* calendar couldn't update; vault IS updated */ } })
+              .catch(function(){});
+          }
+        });
+      }
+    };
+    var onKey = function(e){
+      if (e.key === 'Enter' || e.keyCode === 13){ input.blur(); }
+      if (e.key === 'Escape' || e.keyCode === 27){ saved = true; b.replaceWith(b); }
+    };
+    input.addEventListener('keydown', onKey);
+    input.addEventListener('blur', commit);
+    wrap.appendChild(input);
+    b.replaceWith(wrap);
+    input.focus();
+    input.select();
   } else if (act==='planeshow'){
     // ROUND-17: expander to reveal alternate times / custom edit (opt-in,
     // deliberate second step — never three options on first paint).
