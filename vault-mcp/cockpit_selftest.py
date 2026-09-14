@@ -314,21 +314,47 @@ try:
 except Exception as e:
     print("\n[FAIL] scheduler round4: %s: %s" % (type(e).__name__, e))
 
-# 3c) ROUND-6 PICK DESELECT: a picked task can be REMOVED from the plate and
-#   return to the open list (unpick without completing; frees a slot).
-#   use open-task.md (still status:open) — writeback-task is done by now.
+# 3c) ROUND-7 QUICK-ADD: POST /api/add persists a NEW open-task note to the
+#   Planner source (vault-canonical), which /api/open then surfaces.
 try:
-    s, d = post("/api/plate", {"paths": ["02 Planner/open-task.md"]})
+    s, d = post("/api/add", {"text": "Quick added round7 test task"})
+    ok_path = d.get("ok") is True and d.get("path","").startswith("02 Planner/Tasks/open/")
+    # the note now exists on disk with the checkbox body + status open
+    new_p = Path(tmp) / d["path"]
+    txt = new_p.read_text(encoding="utf-8") if new_p.exists() else ""
+    fm_new,_ = vaultlib.split_frontmatter(txt)
+    checkbox = "- [ ] Quick added round7 test task" in txt
+    ok_note = fm_new.get("type") == "task" and fm_new.get("status") == "open" and checkbox
+    # and /api/open now lists it (created eligible task, not filtered as done)
     s2, d2 = get("/api/open")
-    picked = [x for x in d2["items"] if x["path"] == "02 Planner/open-task.md"]
+    in_open = any(x.get("path") == d["path"] for x in d2["items"])
+    print("\n[PASS] quick-add persists + shows in open (path=%s, checkbox=%s, in_open=%s)" %
+          (d.get("path"), checkbox, in_open) if (ok_path and ok_note and in_open)
+          else "\n[FAIL] quick-add: ok=%s note=%s in_open=%s d=%r" % (ok_path, ok_note, in_open, d))
+except Exception as e:
+    print("\n[FAIL] quick-add round-trip: %s: %s" % (type(e).__name__, e))
+
+# 3d) ROUND-6 PICK DESELECT: a picked task can be REMOVED from the plate and
+#   return to the open list (unpick without completing; frees a slot).
+#   NOTE: once 02 Planner/Tasks/open/ exists, /api/open reads ONLY that dir
+#   (planner source is authoritative) — so the fixture must live there.
+try:
+    ds_dir = Path(tmp) / "02 Planner" / "Tasks" / "open"; ds_dir.mkdir(parents=True, exist_ok=True)
+    (ds_dir / "deselect-task.md").write_text(
+        "---\ntype: task\ntitle: deselect task\nstatus: open\n---\n\n- [ ] deselect task\n",
+        encoding="utf-8")
+    dp = "02 Planner/Tasks/open/deselect-task.md"
+    s, d = post("/api/plate", {"paths": [dp]})
+    s2, d2 = get("/api/open")
+    picked = [x for x in d2["items"] if x["path"] == dp]
     on_plate = len(picked) == 1 and picked[0]["on_plate"] is True
     # deselect = write plate without it -> returns to open list, plate freed
     s3, d3 = post("/api/plate", {"paths": []})
     s4, d4 = get("/api/open")
-    after = [x for x in d4["items"] if x["path"] == "02 Planner/open-task.md"]
+    after = [x for x in d4["items"] if x["path"] == dp]
     back_in_list = len(after) == 1 and after[0]["on_plate"] is False and d4["plate"] == []
     # task is NOT done (deselect never marks complete)
-    fm, _ = vaultlib.split_frontmatter((Path(tmp) / "02 Planner" / "open-task.md").read_text())
+    fm, _ = vaultlib.split_frontmatter((ds_dir / "deselect-task.md").read_text())
     not_done = fm.get("status") != "done"
     print("\n[PASS] pick+deselect round-trip (on_plate=%s, back-in-list=%s, not-done=%s)" %
           (on_plate, back_in_list, not_done) if (on_plate and back_in_list and not_done)

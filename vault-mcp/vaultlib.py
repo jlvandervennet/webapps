@@ -272,6 +272,49 @@ def set_plate(paths: list) -> dict:
     return {"plate": paths}
 
 
+OPEN_TASKS_DIR = VAULT_ROOT / "02 Planner" / "Tasks" / "open"
+
+
+def create_open_task(text: str) -> dict:
+    """Create a NEW open-task note in the Planner open source (round-7 quick-add).
+
+    Writes a genuine `type: task` / `status: open` note under
+    `02 Planner/Tasks/open/` so the cockpit's /api/open scan surfaces it the
+    same as hand-created tasks. GL-002 frontmatter; the quick text is recorded
+    BOTH as `title` AND as a `- [ ] <text>` checkbox in the body (Joe's
+    requested format). New note only — never mutates existing notes or bodies.
+    """
+    from datetime import date as _date
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("empty task text")
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "quick"
+    OPEN_TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    # unique-ish filename: slug + short timestamp to avoid collision
+    import time as _time
+    fname = "%s-%s.md" % (slug, _time.strftime("%H%M%S"))
+    p = OPEN_TASKS_DIR / fname
+    title = text[:80]
+    fm = [
+        FM_OPEN,
+        "title: %s" % (('"%s"' % title.replace('"', "'"))),
+        "type: task",
+        "owner: hermes",
+        "assignee: joe",
+        "status: open",
+        'created: "%s"' % _date.today().isoformat(),
+        FM_CLOSE,
+        "",
+        "# %s" % title,
+        "",
+        "- [ ] %s" % text,
+        "",
+    ]
+    p.write_text("\n".join(fm), encoding="utf-8")
+    return {"ok": True, "path": str(p.relative_to(VAULT_ROOT)),
+            "title": title, "created": _date.today().isoformat()}
+
+
 def get_joe_decisions() -> list:
     """All inbox notes awaiting Joe with decision open."""
     out = []

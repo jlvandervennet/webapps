@@ -332,6 +332,16 @@ def set_due(path, due_date):
     return vaultlib.set_frontmatter(path, {"due": due_date})
 
 
+def add_quick_task(text):
+    """Quick-add a task to the Planner open source (round-7). Vault-canonical
+    via vaultlib.create_open_task (new open-task note, GL-002, Original-Text-
+    safe — never touches existing notes/bodies)."""
+    try:
+        return vaultlib.create_open_task(text)
+    except ValueError as e:
+        return {"ok": False, "output": str(e)}
+
+
 def resolve_decision(path, resolution="resolved", chosen=None):
     """Close a decision: decision:resolved + awaiting:none (via vaultlib).
 
@@ -613,6 +623,8 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return _json(self, {"error": "bad json"}, 400)
         try:
+            if parsed.path == "/api/add":
+                return _json(self, add_quick_task(data.get("text", "")))
             if parsed.path == "/api/set-due":
                 return _json(self, set_due(data["path"], data["due"]))
             if parsed.path == "/api/plate":
