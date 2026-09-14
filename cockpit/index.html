@@ -14,6 +14,12 @@
 /* ── RESET / base ── */
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html{-webkit-text-size-adjust:100%}
+/* ROUND-10: Joe's exact palette as CSS vars */
+:root{
+  --bg-main:#0d1117; --bg-card:#161b22; --bg-hover:#21262d;
+  --border-subtle:#30363d; --text-primary:#f0f6fc; --text-muted:#8b949e;
+  --accent-focus:#58a6ff;
+}
 /* ROUND-9 premium: clean sans stack + #0d1117 base, thin dividers, micro-press */
 body{font-family:system-ui,-apple-system,'Segoe UI',BlinkMacSystemFont,sans-serif;
   background:#0d1117;color:#e6edf3;min-height:100dvh;
@@ -39,7 +45,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:6px
 h1{font-size:1.55rem;letter-spacing:-.3px;font-weight:700;color:#f0f6fc;text-shadow:0 2px 14px rgba(0,0,0,.5)}
 .counter{font-size:3rem;font-weight:200;color:#f0f6fc;font-variant-numeric:tabular-nums;
   line-height:1;display:flex;align-items:baseline;gap:6px}
-.counter small{font-size:.78rem;color:#3fb950;text-transform:uppercase;letter-spacing:1px}
+.counter small{font-size:.78rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px}
 /* ── THOUGHT-DUMP INPUT (autofocus on load, Enter appends instantly) ── */
 .dumpit{position:sticky;top:0;z-index:20;margin:10px 0 4px}
 .dumpit .glass{display:flex;gap:10px;align-items:center;padding:10px 14px}
@@ -56,7 +62,7 @@ nav button.here{background:rgba(88,166,255,.22);color:#58a6ff;border:1px solid r
 /* ── PANES ── */
 .pane{padding:14px}
 h2{font-size:.82rem;text-transform:uppercase;letter-spacing:1.6px;color:#8b949e;margin:0 0 10px}
-.lane-label{font-size:.78rem;text-transform:uppercase;letter-spacing:1.3px;color:#3fb950;
+.lane-label{font-size:.78rem;text-transform:uppercase;letter-spacing:1.3px;color:var(--accent-focus);
   padding:14px 0 6px;font-weight:700}
 /* ── ROUND-8: structural breathing room between the 3 core sections ──
    (1) quick capture  (2) 3-panel toggle nav  (3) active task list  */
@@ -79,14 +85,14 @@ nav{margin-top:22px}
   overflow:hidden;display:block;min-height:1.4em}
 .item .ctx{font-size:.84rem;color:#8b949e;margin-top:4px;word-wrap:break-word;overflow-wrap:break-word}
 .item .actions{display:flex;flex-direction:column;gap:8px;flex:0 0 auto}
-.item.is-active{background:rgba(35,134,54,.16);border:1px solid #238636}
+.item.is-active{background:var(--bg-hover);border:1px solid var(--accent-focus)}
 /* ── BUTTONS ≥50px touch targets (premium: slate, thin, scale .98 press) ── */
 .btn{border:1px solid #30363d;border-radius:16px;min-height:50px;padding:0 18px;font-size:1rem;font-weight:650;
   cursor:pointer;font-family:inherit;background:#161b22;color:#f0f6fc;
   display:inline-flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);
   transition:transform .1s ease,background .1s ease}
 .btn:active{transform:scale(.98);opacity:.85;transition:transform .1s ease}
-.btn-go{background:rgba(35,134,54,.8);color:#fff}
+.btn-go{background:var(--bg-hover);color:var(--text-primary);border:1px solid var(--accent-focus)}
 .btn-pick{background:rgba(88,166,255,.22);color:#58a6ff;border:1px solid #30363d}
 .btn-sm{min-height:52px;padding:0 14px;font-size:.96rem}
 .btn-bare{background:transparent;color:#8b949e;min-height:44px}
@@ -107,8 +113,8 @@ nav{margin-top:22px}
   word-wrap:break-word;overflow-wrap:break-word;word-break:break-word}
 .plan-card .ctx{font-size:.84rem;color:#8b949e;margin-top:5px;word-wrap:break-word;overflow-wrap:break-word}
 .plan-card .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
-.plan-book{min-height:52px;padding:0 16px;border-radius:16px;background:rgba(35,134,54,.82);
-  color:#fff;font-size:.98rem;font-weight:650;border:none;cursor:pointer;font-family:inherit;
+.plan-book{min-height:52px;padding:0 16px;border-radius:16px;background:var(--bg-hover);
+  color:var(--text-primary);font-size:.98rem;font-weight:650;border:1px solid var(--accent-focus);cursor:pointer;font-family:inherit;
   transition:transform .1s ease}
 .plan-book:active{transform:scale(.98)}
 .plan-note{font-size:.8rem;color:#8b949e;border:1px solid #30363d;
@@ -126,7 +132,7 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 @keyframes pulse{0%,100%{opacity:.5}50%{opacity:1}}
 /* ── misc ── */
 .plate{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.86rem;color:#8b949e}
-.plate .n{font-weight:800;color:#3fb950;font-size:1.05rem}
+.plate .n{font-weight:800;color:var(--accent-focus);font-size:1.05rem}
 .footer{color:#6e7681;font-size:.7rem;text-align:center;padding:24px 0 4px}
 /* pick-3 mode: hide the bulk of the vault list — one thing at a time */
 #pickBody.flush{max-height:22.5rem;overflow:hidden;position:relative}
@@ -145,7 +151,7 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 .bump-sheet .actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .bump-sheet #bumpDate{flex:1 1 150px}
 .bump-foot{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
-.bump-hint{font-size:.78rem;color:#3fb950}
+.bump-hint{font-size:.78rem;color:var(--text-muted)}
 @media (min-width:700px){ body{font-size:1rem} }
 </style>
 </head>
