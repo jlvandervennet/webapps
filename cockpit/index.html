@@ -145,6 +145,15 @@ nav{margin-top:22px}
   color:var(--text-primary);font-size:.98rem;font-weight:650;border:1px solid var(--accent-focus);cursor:pointer;font-family:inherit;
   transition:transform .1s ease}
 .plan-book:active{transform:scale(.98)}
+.plan-book-primary{min-height:60px;font-size:1.04rem;width:100%;box-shadow:0 8px 22px rgba(0,0,0,.35)}
+/* ROUND-17: opt-in expanders (alternate times / custom edit) — a deliberate
+   second step, NOT three selectable options on first paint. */
+.plan-expand{display:block;width:100%;min-height:46px;margin-top:8px;padding:0 12px;
+  border-radius:14px;background:transparent;color:#8b949e;font-size:.9rem;
+  border:1px dashed #30363d;cursor:pointer;font-family:inherit;transition:transform .1s ease}
+.plan-expand:active{transform:scale(.98);color:#f0f6fc;border-color:#58a6ff}
+.plan-more{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.plan-more[hidden]{display:none}
 .plan-note{font-size:.8rem;color:#8b949e;border:1px solid #30363d;
   background:rgba(210,153,34,.08);border-radius:12px;padding:10px 12px;margin-top:8px}
 /* ── inputs ── */
@@ -470,25 +479,48 @@ function renderPlan(r){
   // ROUND-16: Plan is LOCKED to the plate — it only schedules the tasks already
   // picked. No re-pick/re-plan affordance here; changing what’s planned goes
   // through the explicit Pick-tab edit (that IS the edit function).
+  // ROUND-17: Plan reads as ONE confirm, not a menu. First paint = ONE primary
+  // "Book it" for the lean (best/earliest free slot). Alternate times + custom
+  // edit are tucked behind explicit expanders — a deliberate second step Joe
+  // opts into, never three options on load. Nothing removed, just re-ordered.
   var html = '<div class="plan-note" style="margin-bottom:10px">Scheduling what’s on your plate. Change your pick on the Pick tab.</div>' +
     items.map(function(it){
-    // round-7: ClickUp-inspired plan cards matching the glass dark theme
-    var slots = it.found ? it.slots.map(function(sl){
-      return '<button class="plan-book" data-act="book" data-title="'+esc(it.title)+'" data-date="'+sl.date+'" data-start="'+sl.start+'" data-end="'+sl.end+'">'+esc(sl.label)+'</button>';
-    }).join('') : '<div class="plan-note">No suggestion this week — set your own time below.</div>';
-    var override =
-      '<div class="plan-note" style="margin-top:4px">Edit: set your own time instead</div>' +
-      '<div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">' +
-      '<input type="date" id="own-day-'+esc(it.idx)+'" style="flex:1 1 130px">' +
-      '<input type="time" id="own-start-'+esc(it.idx)+'" style="flex:0 0 100px" value="10:00">' +
-      '<input type="time" id="own-end-'+esc(it.idx)+'" style="flex:0 0 100px" value="10:30">' +
-      '<button class="plan-book" data-act="bookown" data-title="'+esc(it.title)+'" data-idx="'+esc(it.idx)+'">Book it</button></div>';
-    return '<div class="plan-card"><div class="body">' +
-      '<div class="title">'+esc(it.title)+'</div>' +
-      '<div class="ctx">'+ (it.found?'tap a time to book it':'no free slot found yet — set your own below.') +'</div>' +
-      '<div class="actions">'+slots+'</div>' + override + '</div>' +
-      '</div>';
-  }).join('');
+      var slots = it.slots || [];
+      var lean = slots[0];                       // best/earliest free slot
+      // PRIMARY: one confirmable suggestion.
+      var primary = lean
+        ? '<button class="plan-book plan-book-primary" data-act="book" data-title="'+esc(it.title)+'" '+
+          'data-date="'+esc(lean.date)+'" data-start="'+esc(lean.start)+'" data-end="'+esc(lean.end)+'">Book it · '+esc(lean.label)+'</button>'
+        : '<div class="plan-note">No free slot suggested this week — open “Set your own” below.</div>';
+      // ALTERNATES: the rest of the suggestions, hidden until Joe asks.
+      var altSlots = slots.slice(1).map(function(sl){
+        return '<button class="plan-book" data-act="book" data-title="'+esc(it.title)+'" '+
+          'data-date="'+esc(sl.date)+'" data-start="'+esc(sl.start)+'" data-end="'+esc(sl.end)+'">'+esc(sl.label)+'</button>';
+      }).join('');
+      var alternates = slots.length > 1
+        ? '<button class="plan-expand" data-act="planeshow" data-target="plan-more-alt-'+esc(it.idx)+'">Suggest a different time</button>' +
+          '<div class="plan-more" id="plan-more-alt-'+esc(it.idx)+'" hidden>' + altSlots + '</div>'
+        : '';
+      // CUSTOM EDIT: also opt-in.
+      var custom =
+        '<button class="plan-expand" data-act="planeshow" data-target="plan-more-custom-'+esc(it.idx)+'">Set your own time</button>' +
+        '<div class="plan-more" id="plan-more-custom-'+esc(it.idx)+'" hidden>' +
+        '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">' +
+        '<input type="date" id="own-day-'+esc(it.idx)+'" style="flex:1 1 130px">' +
+        '<input type="time" id="own-start-'+esc(it.idx)+'" style="flex:0 0 100px" value="10:00">' +
+        '<input type="time" id="own-end-'+esc(it.idx)+'" style="flex:0 0 100px" value="10:30">' +
+        '<button class="plan-book" data-act="bookown" data-title="'+esc(it.title)+'" data-idx="'+esc(it.idx)+'">Book it</button>' +
+        '</div>' +
+        '<div class="plan-note" style="margin-top:6px">Picks the day + time you set — keeps it on the calendar.</div>' +
+        '</div>';
+      return '<div class="plan-card"><div class="body">' +
+        '<div class="title">'+esc(it.title)+'</div>' +
+        '<div class="ctx">Suggested time — tap to book</div>' +
+        '<div class="actions">'+primary+'</div>' +
+        alternates + custom +
+        '</div>' +
+        '</div>';
+    }).join('');
   document.getElementById('planBody').innerHTML = html;
 }
 function renderPlanError(){
@@ -792,6 +824,16 @@ document.addEventListener('click', function(ev){
           if(!r.ok){ target.textContent = 'Book again'; target.disabled=false; target.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
         });
       });
+  } else if (act==='planeshow'){
+    // ROUND-17: expander to reveal alternate times / custom edit (opt-in,
+    // deliberate second step — never three options on first paint).
+    var tg = b.dataset.target;
+    var box = document.getElementById(tg);
+    if (box){
+      var hidden = box.hasAttribute('hidden');
+      if (hidden){ box.removeAttribute('hidden'); }
+      else { box.setAttribute('hidden', ''); }
+    }
   } else if (act==='bookown'){
     var t=b.dataset.title, ix=b.dataset.idx;
     var day=document.getElementById('own-day-'+ix).value;
