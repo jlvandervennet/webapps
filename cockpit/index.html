@@ -72,6 +72,13 @@ h1{font-size:1.55rem;letter-spacing:-.3px;font-weight:700;color:#f0f6fc;text-sha
 #quickAdd{flex:1;background:transparent;border:none;color:#e6edf3;font-size:1.18rem;
   font-family:inherit;outline:none;min-height:52px}
 #quickAdd::placeholder{color:#6e7681;font-size:1rem}
+.cap-sel{flex:0 0 auto;display:flex;gap:4px;background:rgba(33,38,45,.6);border:1px solid
+  rgba(48,54,61,.6);border-radius:12px;padding:3px}
+.cap-sel button{border:none;background:transparent;color:#8b949e;font-family:inherit;
+  font-size:.82rem;font-weight:600;min-height:42px;min-width:56px;border-radius:9px;
+  transition:all .1s ease}
+.cap-sel button.here{background:#21262d;color:#f0f6fc}
+.cap-sel button:active{transform:scale(.96)}
 .dump-add{flex:0 0 auto;min-width:54px;min-height:52px;border-radius:16px;background:rgba(88,166,255,.22);
   color:#58a6ff;border:1px solid rgba(88,166,255,.45);font-size:1.25rem;font-weight:700}
 /* ── NAV (one-destination-at-a-time buttons, ≥50px) ── */
@@ -246,6 +253,10 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 <!-- thought-dump: autofocus on load; Enter appends instantly (optimistic) -->
 <div class="dumpit">
   <div class="glass">
+    <div class="cap-sel" role="radiogroup" aria-label="Capture type">
+      <button type="button" id="capModeTask" class="here" role="radio" aria-checked="true" data-capmode="task">Task</button>
+      <button type="button" id="capModeInbox" role="radio" aria-checked="false" data-capmode="inbox">Inbox</button>
+    </div>
     <input id="quickAdd" type="text" inputmode="text" autocomplete="off"
       autocorrect="off" autocapitalize="sentences" spellcheck="false"
       placeholder="Quick thought… type + Enter" aria-label="Quick add a thought">
@@ -667,26 +678,32 @@ function submitQuick(){
   var text = (inp.value||'').trim();
   if (!text) return;
   zap();                                   // dopamine: click + haptic
-  // OPTIMISTIC: render locally the instant Enter hits (zero network wait)
-  var card = '<div class="item done-pop"><div class="body"><div class="title">'+esc(text)+'</div>' +
-    '<div class="ctx">saving…</div></div></div>';
-  var body = document.getElementById('pickBody');
-  body.innerHTML = body.innerHTML + card;
+  var capMode = (typeof _capMode==='string') ? _capMode : 'task';
+  // OPTIMISTIC (task only — an inbox capture reloads its own Decide surface:
+  // appending a pseudo-task row to the pick list would lie about where it went).
+  var card = null, body = null;
+  if (capMode === 'task'){
+    card = '<div class="item done-pop"><div class="body"><div class="title">'+esc(text)+'</div>' +
+      '<div class="ctx">saving…</div></div></div>';
+    body = document.getElementById('pickBody');
+    body.innerHTML = body.innerHTML + card;
+  }
   inp.value = '';
   inp.focus();                             // keep keyboard open for the next dump
-  // PERSIST (round-7): POST to /api/add -> saves a real open-task note to the
-  // Planner source (vault-canonical via vaultlib). On success refresh the list;
-  // on failure flip the row to an honest note instead of faking success.
-  api('/api/add', {method:'POST', body:{text: text}}).then(function(r){
+  // PERSIST / route: Task -> /api/add (open task), Inbox -> /api/add-capture.
+  var endpoint = (capMode === 'inbox') ? '/api/add-capture' : '/api/add';
+  api(endpoint, {method:'POST', body:{text: text}}).then(function(r){
     if (r && r.ok){
-      // reflect saved status; reload so the new task shows as a real open task
-      load('pick');
+      // refresh the surface the capture belongs to: task -> pick, inbox -> decide
+      load(capMode==='inbox' ? 'decide' : 'pick');
     } else {
       var note = r && r.output ? r.output : 'couldn’t save that one.';
-      body.innerHTML = body.innerHTML.replace(card, card.replace('saving…', note));
+      if (capMode === 'task'){ body.innerHTML = body.innerHTML.replace(card, card.replace('saving…', note)); }
+      else { alert(note); }
     }
   }).catch(function(){
-    body.innerHTML = body.innerHTML.replace(card, card.replace('saving…', 'couldn’t save that one.'));
+    if (capMode === 'task'){ body.innerHTML = body.innerHTML.replace(card, card.replace('saving…', 'couldn’t save that one.')); }
+    else { alert('couldn’t save that one.'); }
   });
 }
 
@@ -984,6 +1001,27 @@ document.getElementById('quickAdd').addEventListener('keydown', function(e){
 });
 document.getElementById('quickAdd').addEventListener('input', function(){});
 document.getElementById('quickAddBtn').addEventListener('click', submitQuick);
+
+/* Omega P1: TASK / INBOX capture selector — one-and-done, no picker/due/NLP.
+   _capMode routes the quick-capture: task -> /api/add, inbox -> /api/add-capture. */
+var _capMode = 'task';
+function setCapMode(mode){
+  _capMode = mode;
+  var sel = document.querySelectorAll('.cap-sel button');
+  for (var i=0;i<sel.length;i++){
+    var on = sel[i].dataset.capmode === mode;
+    sel[i].classList.toggle('here', on);
+    sel[i].setAttribute('aria-checked', on ? 'true' : 'false');
+  }
+  var inp = document.getElementById('quickAdd');
+  inp.placeholder = (mode === 'inbox')
+    ? 'Drop a link / idea / note — team will file it…'
+    : 'Quick thought… type + Enter';
+  inp.focus();
+}
+document.querySelectorAll('.cap-sel button').forEach(function(b){
+  b.addEventListener('click', function(){ zap(); setCapMode(b.dataset.capmode); });
+});
 
 /* tabs */
 document.querySelectorAll('[data-tab]').forEach(function(tab){

@@ -307,6 +307,49 @@ def set_plate(paths: list) -> dict:
 
 
 OPEN_TASKS_DIR = VAULT_ROOT / "02 Planner" / "Tasks" / "open"
+INBOX_DIR = VAULT_ROOT / "01 Inbox"
+
+
+def create_inbox_capture(text: str) -> dict:
+    """Create a NEW 01 Inbox capture note (awaiting:joe) — Omega quick-capture.
+
+    Joe drops a link / project idea / research topic; the team files + acts on
+    it. Writes a genuine `type: inbox` / `awaiting: joe` / `decision: open`
+    capture note under `01 Inbox/` with GL-002 frontmatter so it can be
+    resolved like any decision and so the fleet's decision surface sees it.
+    The quick text is recorded BOTH as `title` AND as a `- [ ] <text>` checkbox
+    in the body (Joe's requested format). New note only — never mutates an
+    existing note/body (Original-Text-safe).
+    """
+    from datetime import date as _date
+    text = (text or "").strip()
+    if not text:
+        raise ValueError("empty capture text")
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "capture"
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)
+    import time as _time
+    fname = "%s-%s.md" % (slug, _time.strftime("%H%M%S"))
+    p = INBOX_DIR / fname
+    title = text[:80]
+    fm = [
+        FM_OPEN,
+        "title: %s" % (('"%s"' % title.replace('"', "'"))),
+        "type: inbox",
+        "owner: hermes",
+        "status: open",
+        "awaiting: joe",
+        "decision: open",
+        'created: "%s"' % _date.today().isoformat(),
+        FM_CLOSE,
+        "",
+        "# %s" % title,
+        "",
+        "- [ ] %s" % text,
+        "",
+    ]
+    p.write_text("\n".join(fm), encoding="utf-8")
+    return {"ok": True, "path": str(p.relative_to(VAULT_ROOT)),
+            "title": title, "created": _date.today().isoformat()}
 
 
 def create_open_task(text: str) -> dict:

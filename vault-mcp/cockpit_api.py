@@ -16,10 +16,12 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import urllib.parse
 from datetime import date, datetime, timezone
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import time as _time
 
 # Make vaultlib importable regardless of cwd.
 VAULT_MCP = Path("/opt/data/vault-mcp")
@@ -34,7 +36,69 @@ HOST = os.environ.get("COCKPIT_HOST", "100.113.241.19")
 PORT = int(os.environ.get("COCKPIT_PORT", "8792"))
 PASSWORD = os.environ.get("COCKPIT_PASSWORD", "")
 SCHED = "/opt/data/scripts/sched.py"
+AUTOCOMMIT = "/opt/data/scripts/vault-autocommit.sh"
 DONE_LOG = VAULT / "05 Assets" / "Data" / "done" / "completions.jsonl"
+
+# ── ROUND-15: auto git commit+push after each cockpit write-back ─────────────
+# Joe's rule: every quick-add / decider move / scheduler book syncs the vault
+# repo (mobile + container + GitHub) so nothing is ever only-in-one-place. This
+# is the COCKPIT's OWN write path — agents still go through the Vesta commit
+# gate (vault-commit.sh); this never touches that path. Mechanics:
+#   - Scoped: only the files the write just addressed (task note / plate / done
+#     log / decision note) are committed — never `git add -A` transient junk.
+#   - NON-BLOCKING: the UI has already rendered; we fire in a background thread
+#     so a tap is NEVER delayed waiting on a commit/push.
+#   - COALESCED: a ~2s debounce collapses a burst of actions into ONE commit.
+#   - Idempotent: vault-autocommit.sh no-ops cleanly when there's nothing new.
+AUTOCOMMIT_DEBOUNCE = 2.0
+_autocommit_lock = threading.Lock()
+_autocommit_timer = None
+_pending_paths = set()          # vault-relative paths staged for the next commit
+_pending_msgs = []              # human short notes for the commit subject
+
+def _vault_rel(path) -> str:
+    """Normalize an absolute or already-relative vault path to repo-relative."""
+    p = Path(str(path))
+    if p.is_absolute():
+        try:
+            p = p.relative_to(VAULT)
+        except ValueError:
+            return None
+    return p.as_posix()
+
+def _run_autocommit():
+    """Drain the pending queue and fire ONE scoped commit+push in the background."""
+    global _autocommit_timer
+    with _autocommit_lock:
+        paths = sorted(_pending_paths)
+        msgs = _pending_msgs[:]
+        _pending_paths.clear()
+        _pending_msgs.clear()
+        _autocommit_timer = None
+    if not paths:
+        return
+    subject = msgs[-1] if msgs else "Cockpit sync"
+    # vault-autocommit.sh only touches the explicit paths; no Vesta gate here.
+    subprocess.Popen(
+        [AUTOCOMMIT, subject, *paths],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+def queue_vault_commit(rel_path, message):
+    """Register a vault file this write changed and schedule a coalesced push."""
+    rel = _vault_rel(rel_path)
+    if not rel:
+        return
+    global _autocommit_timer
+    with _autocommit_lock:
+        if rel.endswith(".md") or rel.endswith(".jsonl"):
+            _pending_paths.add(rel)
+            if message and (not _pending_msgs or _pending_msgs[-1] != message):
+                _pending_msgs.append(message)
+        if _autocommit_timer is None:
+            _autocommit_timer = threading.Timer(AUTOCOMMIT_DEBOUNCE, _run_autocommit)
+            _autocommit_timer.daemon = True
+            _autocommit_timer.start()
 
 TODAY = date.today().isoformat()
 
@@ -329,7 +393,9 @@ def _next_up(limit=3):
 # ── Write endpoints (frontmatter-safe via vaultlib) ────────────────────────
 def set_due(path, due_date):
     """Set decide-by on an open item (uses GL-002 `due`; no new field)."""
-    return vaultlib.set_frontmatter(path, {"due": due_date})
+    r = vaultlib.set_frontmatter(path, {"due": due_date})
+    queue_vault_commit(r.get("path", path), "Cockpit: set due on a task")
+    return r
 
 
 def add_quick_task(text):
@@ -337,7 +403,27 @@ def add_quick_task(text):
     via vaultlib.create_open_task (new open-task note, GL-002, Original-Text-
     safe — never touches existing notes/bodies)."""
     try:
-        return vaultlib.create_open_task(text)
+        r = vaultlib.create_open_task(text)
+        if r.get("ok"):
+            queue_vault_commit(r["path"], "Cockpit: quick add – %s" % r.get("title", "task"))
+        return r
+    except ValueError as e:
+        return {"ok": False, "output": str(e)}
+
+
+def add_inbox_capture(text):
+    """Quick-capture a line to the INBOX (Omega P1), for the team to file+act.
+
+    Vault-canonical via vaultlib.create_inbox_capture — a NEW 01 Inbox capture
+    note (type:inbox / awaiting:joe / decision:open, GL-002 + Original-Text-
+    safe). Same safe-write path as create_open_task, but lands in the Inbox
+    instead of the Planner open-task dir.
+    """
+    try:
+        r = vaultlib.create_inbox_capture(text)
+        if r.get("ok"):
+            queue_vault_commit(r["path"], "Cockpit: captured to inbox – %s" % r.get("title", "capture"))
+        return r
     except ValueError as e:
         return {"ok": False, "output": str(e)}
 
@@ -348,6 +434,7 @@ def rename_task(path, new_title):
     prose. Returns the write trace so the UI can reflect it."""
     try:
         r = vaultlib.rename_task(path, new_title)
+        queue_vault_commit(path, "Cockpit: renamed task")
         return {"ok": True, "path": r["path"], "old": r["old"],
                 "title": r["title"], "output": "Renamed ✔"}
     except (ValueError, FileNotFoundError) as e:
@@ -407,6 +494,13 @@ def revert_done(path):
                 daily.write_text("\n".join(kept) + "\n", encoding="utf-8")
     except OSError:
         pass
+    # round-15: auto-sync everything this undo touched (note + done-log records)
+    queue_vault_commit(path, "Cockpit: undone a task")
+    queue_vault_commit(DONE_LOG, "Cockpit: undone a task")
+    try:
+        queue_vault_commit("00 Daily Scratchpad/%s.md" % date.today().isoformat(), "Cockpit: undone a task")
+    except Exception:
+        pass
     return {**out, "ok": True, "output": "Undone — task reopened.",
             "removed_log_lines": removed_lines, "removed_daily": removed_daily,
             "title": title}
@@ -436,6 +530,12 @@ def resolve_decision(path, resolution="resolved", chosen=None):
             logged_log = "done-logged"
         except Exception:
             logged_log = "(log hiccup)"
+    # round-15: auto-sync the decision note + the done-log records (when logged)
+    queue_vault_commit(path, "Cockpit: resolved a decision")
+    if logged_log:
+        today_note = "00 Daily Scratchpad/%s.md" % date.today().isoformat()
+        queue_vault_commit(today_note, "Cockpit: decision logged")
+        queue_vault_commit("05 Assets/Data/done/completions.jsonl", "Cockpit: decision logged")
     return {**outcome, "chosen": chosen or "", "logged": logged_log}
 
 
@@ -490,6 +590,13 @@ def mark_task_done(path):
         # never fail the Done if logging hiccups — status IS flipped
         logged_to = "(log failed: %s)" % type(e).__name__
 
+    # round-15: auto-sync the flipped note + the done-log records it touched
+    queue_vault_commit(write.get("path", path), "Cockpit: task done – %s" % title[:60])
+    if logged_to and not logged_to.startswith("("):
+        queue_vault_commit(logged_to, "Cockpit: done logged")
+    if log_path:
+        queue_vault_commit(log_path, "Cockpit: done logged")
+
     return {
         "ok": True, "deduped": False,
         "output": "Done — task completed and logged.",
@@ -530,6 +637,8 @@ def schedule_plate():
     """
     plate = vaultlib.get_plate()
     out = {"plate_count": len(plate), "items": []}
+    # ROUND-18: load any already-booked events so Plan can LOCK those cards.
+    booked = _booked_proposals()
     for idx, path in enumerate(plate):
         # Resolve a human title; drop anything we can't cleanly name (no "(unknown)").
         title = None
@@ -544,12 +653,27 @@ def schedule_plate():
         if path.startswith("00 Daily Scratchpad") or not title:
             continue
         slots = _find_slots_clean(title, 30)
-        out["items"].append({
+        item = {
             "idx": idx,              # stable index for the per-row manual override
+            "path": path,            # round-18: needed for inline edit rename
             "title": title,
             "slots": slots[:3],  # a few clear choices, not a dump
             "found": len(slots) > 0,
-        })
+            "locked": False, "booked_label": "",
+        }
+        # If this task already has a booked event, LOCK the card: hide the slot
+        # options + Book it, show the "Booked for …" badge instead.
+        if title in booked:
+            b = booked[title]
+            dt, st = (b.get("date") or ""), b.get("start") or ""
+            item["locked"] = True
+            item["event_id"] = b.get("event_id", "")
+            # full ISO start/end so the inline reschedule picker can prefill
+            item["booked_start"] = b.get("start", "")
+            item["booked_end"] = b.get("end", "")
+            # human badge: "09-15 07:00"
+            item["booked_label"] = "%s %s" % (dt[5:10] if len(dt) >= 10 else dt, st[11:16] if len(st) >= 16 else st)
+        out["items"].append(item)
     return out
 
 
@@ -581,6 +705,131 @@ def _find_slots_clean(summary, duration, window=None, days=7):
     return slots
 
 
+# ── Round-18: locked/scheduled state + real-time gcal patch ────────────────
+PROPOSAL_DIR = Path("/opt/data/cockpit/scheduling-proposals")
+
+
+def _booked_proposals() -> dict:
+    """Map task-title -> booked proposal for every `status: booked` proposal.
+
+    Booked events carry the vault task title in `title:` + a real Google
+    `event_id:` + date/start/end. We key by normalized title so Plan can lock
+    the exact plate card that already has a calendar event.
+    """
+    out = {}
+    if not PROPOSAL_DIR.is_dir():
+        return out
+    for f in PROPOSAL_DIR.glob("*.md"):
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            m = re.search(r"^---\n(.*?)\n---", text, re.S)
+            if not m:
+                continue
+            meta = {}
+            for line in m.group(1).splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    meta[k.strip()] = json.loads(v.strip())
+            if str(meta.get("status", "")).lower() == "booked" and meta.get("event_id"):
+                title = (meta.get("title") or f.stem).strip()
+                if title:
+                    out[title] = meta
+        except Exception:
+            continue
+    return out
+
+
+def update_calendar_event(summary, new_title, event_id, start_iso="", end_iso=""):
+    """PATCH an existing Google Calendar event (round-18 rename + round-19 move).
+
+    Same creds/timezone handling as the round-15 create fix (HERMES_HOME + the
+    resolved venv python). Builds the patch from whatever is provided:
+      - new_title  -> template the title (rename)
+      - start/end  -> move the slot (reschedule), Europe/Rome applied in gapi.
+    On success rewrites the matching `status: booked` proposal file (title
+    and/or date/start/end) so the Plan lock + booked badge stay in sync.
+    Returns a clean, proxied result — no raw CLI to the panel.
+    """
+    gapi = "/opt/data/skills/productivity/google-workspace/scripts/google_api.py"
+    py = _resolve_google_py()
+    cmd = [py, gapi, "calendar", "update", event_id]
+    if new_title:
+        cmd += ["--summary", new_title]
+    if start_iso:
+        cmd += ["--start", start_iso]
+    if end_iso:
+        cmd += ["--end", end_iso]
+    r = subprocess.run(cmd, capture_output=True, text=True, env=_sched_env(), timeout=60)
+    if r.returncode != 0:
+        return {"ok": False,
+                "output": "Couldn't update the calendar event — the Google service didn't confirm it."}
+    try:
+        created = json.loads(r.stdout.strip())
+        if created.get("status") == "updated" and created.get("id"):
+            # keep the title-keyed Plan lock + booked badge in sync: update them
+            # (title and/or slot) in the matching booked proposal
+            for f in (PROPOSAL_DIR.glob("*.md") if PROPOSAL_DIR.is_dir() else []):
+                try:
+                    txt = f.read_text(encoding="utf-8", errors="replace")
+                    m = re.search(r"^---\n(.*?)\n---", txt, re.S)
+                    if not m:
+                        continue
+                    meta = {}
+                    for line in m.group(1).splitlines():
+                        if ":" in line:
+                            k, v = line.split(":", 1)
+                            try:
+                                meta[k.strip()] = json.loads(v.strip())
+                            except Exception:
+                                meta[k.strip()] = v.strip()
+                    if str(meta.get("status", "")).lower() == "booked" and meta.get("event_id") == event_id:
+                        import json as _j
+                        if new_title:
+                            meta["title"] = new_title
+                        if start_iso:
+                            meta["date"] = start_iso[:10]
+                            meta["start"] = start_iso
+                        if end_iso:
+                            meta["end"] = end_iso
+                        fm = ["---"]
+                        for k, v in meta.items():
+                            fm.append("%s: %s" % (k, _j.dumps(v, ensure_ascii=False)))
+                        fm.append("---")
+                        rest = txt.split("---", 2)[2] if txt.count("---") >= 2 else ""
+                        # keep the H1/# line in the body synced if it matched old title
+                        if new_title and rest.lstrip().startswith("# "):
+                            rest = re.sub(r"^# .*", "# %s" % new_title, rest, count=1)
+                        f.write_text("\n".join(fm) + rest, encoding="utf-8")
+                        break
+                except Exception:
+                    continue
+            return {"ok": True, "event_id": created.get("id"),
+                    "summary": created.get("summary"), "start": created.get("start", start_iso)}
+    except Exception:
+        pass
+    return {"ok": False,
+            "output": "Couldn't update the calendar event — the service didn't confirm it."}
+
+
+def _resolve_google_py() -> str:
+    """Which python has googleapiclient (same candidates sched.py uses)."""
+    for p in ("/opt/data/.google-venv/bin/python",
+              "/opt/data/.gapi-venv/bin/python",
+              "/opt/data/.venv/bin/python"):
+        if Path(p).exists():
+            probe = subprocess.run([p, "-c", "import googleapiclient"],
+                                   capture_output=True, text=True)
+            if probe.returncode == 0:
+                return p
+    return sys.executable or "python3"
+
+
+def _sched_env() -> dict:
+    env = dict(os.environ)
+    env["HERMES_HOME"] = "/opt/data"
+    return env
+
+
 def book_calendar(summary, start_iso, end_iso, location="", description="", force=True):
     """Write a date-set straight to Google Calendar via sched.py book (approved).
 
@@ -604,12 +853,20 @@ def book_calendar(summary, start_iso, end_iso, location="", description="", forc
     if not force:
         cmd.append("--dry-run")
     book_code, book_out = _sched(*cmd)
+    # A dry-run / preview is NEVER a book — it must not report success on a
+    # Google event that doesn't exist yet. Only a forced book is "Booked".
+    if not force:
+        return {"ok": False, "preview": True,
+                "output": "Preview only — not booked. A real book needs a confirmed tap."}
     # Proxy: never surface raw CLI/sched.py output to a panel (contract §5).
+    # Only "Booked" when the book command truly succeeded — which now means
+    # sched.py saw a real Google event (id + htmlLink), not just rc-clean.
+    # FALSE SUCCESS was happening because a swallowed google 400 still printed
+    # and returned rc 0; the fixed sched.py commits status:booked only on a
+    # verified event. So honor book_code strictly and surface a real error.
     if book_code != 0:
-        return {"ok": False, "output": "Couldn't add it to your calendar — try a different time."}
-    if book_code == 0:
-        return {"ok": True, "output": "Booked — it's on your calendar."}
-    return {"ok": False, "output": "Couldn't add it to your calendar."}
+        return {"ok": False, "output": "Couldn't add it to your calendar — the calendar service didn't confirm it. Try a different time."}
+    return {"ok": True, "output": "Booked — it's on your calendar."}
 
 
 # ── HTTP handler ───────────────────────────────────────────────────────────
@@ -654,6 +911,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Service-Worker-Allowed", "/")
+        # never serve a stale app shell / service worker — a deploy must reach
+        # the device immediately (was the pick-persist "stale HTML" root cause)
+        if path in ("/", "/index.html", "/manifest.json", "/sw.js"):
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
@@ -699,14 +960,25 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parsed.path == "/api/add":
                 return _json(self, add_quick_task(data.get("text", "")))
+            if parsed.path == "/api/add-capture":
+                return _json(self, add_inbox_capture(data.get("text", "")))
             if parsed.path == "/api/rename":
                 return _json(self, rename_task(data["path"], data.get("title", data.get("new_title", ""))))
+            if parsed.path == "/api/calendar/update":
+                # round-18/19: PATCH an already-booked event after an inline
+                # title edit (rename) OR a reschedule (move start/end). Rome.
+                return _json(self, update_calendar_event(
+                    data.get("summary", ""), data.get("new_title", data.get("title", "")),
+                    data.get("event_id", ""),
+                    data.get("start", ""), data.get("end", "")))
             if parsed.path == "/api/undone":
                 return _json(self, revert_done(data["path"]))
             if parsed.path == "/api/set-due":
                 return _json(self, set_due(data["path"], data["due"]))
             if parsed.path == "/api/plate":
-                return _json(self, vaultlib.set_plate(data.get("paths", [])))
+                _plate_out = vaultlib.set_plate(data.get("paths", []))
+                queue_vault_commit("02 Planner/_ Active Plate.md", "Cockpit: plate updated")
+                return _json(self, _plate_out)
             if parsed.path == "/api/resolve":
                 return _json(self, resolve_decision(data["path"], data.get("resolution", "resolved"),
                                                     data.get("chosen")))
@@ -716,7 +988,14 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, book_calendar(
                     data["summary"], data["start"], data["end"],
                     data.get("location", ""), data.get("description", ""),
-                    data.get("force", False)))
+                    # A book tap in the cockpit IS the approval (Joe's
+                    # rule: pick a date -> on the calendar). Default force=True
+                    # so it really books; a missing/False force used to take the
+                    # --dry-run path and STILL report "Booked" while creating
+                    # nothing (the device-only false-success). Preview is only
+                    # surfaced when force is EXPLICITLY False AND honored as a
+                    # preview below — never as success.
+                    data.get("force", True)))
             return _json(self, {"error": "unknown endpoint"}, 404)
         except (KeyError, ValueError) as e:
             return _json(self, {"error": str(e)}, 400)

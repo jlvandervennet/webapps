@@ -334,6 +334,26 @@ try:
 except Exception as e:
     print("\n[FAIL] quick-add round-trip: %s: %s" % (type(e).__name__, e))
 
+# 3f) ROUND-? / OMEGA P1: INBOX capture — POST /api/add-capture writes a real
+#     01 Inbox note with awaiting:joe / decision:open frontmatter (team files it).
+try:
+    s, d = post("/api/add-capture", {"text": "Omega inbox capture test idea"})
+    ok_path = d.get("ok") is True and d.get("path","").startswith("01 Inbox/")
+    new_p = Path(tmp) / d["path"]
+    txt = new_p.read_text(encoding="utf-8") if new_p.exists() else ""
+    fm_in,_ = vaultlib.split_frontmatter(txt)
+    checkbox = "- [ ] Omega inbox capture test idea" in txt
+    ok_fm = fm_in.get("type") == "inbox" and fm_in.get("status") == "open" \
+        and fm_in.get("awaiting") == "joe" and fm_in.get("decision") == "open" and checkbox
+    # and it now surfaces as an awaiting-Joe item (a live decision row)
+    s2, d2 = get("/api/decide")
+    in_decide = any(x.get("path") == d["path"] for x in d2["decisions"])
+    print("\n[PASS] inbox-capture writes 01 Inbox note (path=%s, fm-ok=%s, in-decide=%s)" %
+          (d.get("path"), ok_fm, in_decide) if (ok_path and ok_fm and in_decide)
+          else "\n[FAIL] inbox-capture: ok_path=%s fm=%r in_decide=%s d=%r" % (ok_path, fm_in, in_decide, d))
+except Exception as e:
+    print("\n[FAIL] inbox-capture round-trip: %s: %s" % (type(e).__name__, e))
+
 # 3d) ROUND-6 PICK DESELECT: a picked task can be REMOVED from the plate and
 #   return to the open list (unpick without completing; frees a slot).
 #   NOTE: once 02 Planner/Tasks/open/ exists, /api/open reads ONLY that dir
@@ -362,6 +382,75 @@ try:
                (on_plate, back_in_list, not_done))
 except Exception as e:
     print("\n[FAIL] deselect: %s: %s" % (type(e).__name__, e))
+
+# 3e) ROUND-12: RENAME round-trip (inline edit) — renew the quick-add note
+#   and rename via /api/rename; body checkbox + H1 reflect; title unchanged prose.
+try:
+    s, d = post("/api/add", {"text": "round12 rename me task"})
+    rp = d["path"]
+    s, rr = post("/api/rename", {"path": rp, "title": "round12 renamed task"})
+    txt = (Path(tmp) / rp).read_text(encoding="utf-8")
+    fm_r, _ = vaultlib.split_frontmatter(txt)
+    ok = rr.get("ok") and fm_r.get("title") == "round12 renamed task" \
+        and "# round12 renamed task" in txt and "- [ ] round12 renamed task" in txt \
+        and "round12 rename me task" not in txt
+    print("\n[PASS] /api/rename round-trip (title+checkbox+H1, prose-safe)" if ok
+          else "\n[FAIL] rename: rr=%r fm=%r" % (rr, fm_r))
+except Exception as e:
+    print("\n[FAIL] rename: %s: %s" % (type(e).__name__, e))
+
+# 3f) ROUND-12: UNDO — done then undone restores status open + removes /done log
+try:
+    s, d = post("/api/add", {"text": "round12 undo me task"})
+    up = d["path"]
+    s, dn = post("/api/done", {"path": up})
+    logp = Path(tmp) / "05 Assets" / "Data" / "done" / "completions.jsonl"
+    had = logp.is_file() and "round12 undo me task" in logp.read_text()
+    s, ud = post("/api/undone", {"path": up})
+    fm_u, _ = vaultlib.split_frontmatter((Path(tmp) / up).read_text())
+    removed = logp.is_file() and "round12 undo me task" not in logp.read_text()
+    print("\n[PASS] /api/undone reopens+removes done-log (status=%r, log-gone=%s)" %
+          (fm_u.get("status"), removed) if (ud.get("ok") and fm_u.get("status") == "open" and removed)
+          else "\n[FAIL] undo: ud=%r status=%r had=%s" % (ud, fm_u.get("status"), had))
+except Exception as e:
+    print("\n[FAIL] undo: %s: %s" % (type(e).__name__, e))
+
+# 3g) ROUND-12: PLATE restore — /api/open returns plate so a returning Pick
+#   view can restore selections (frontend keeps a localStorage mirror too).
+try:
+    s, d = post("/api/plate", {"paths": ["02 Planner/Tasks/open/deselect-task.md"]})
+    s, o = get("/api/open")
+    ok = o.get("plate") == ["02 Planner/Tasks/open/deselect-task.md"] \
+        and any(x["path"] == "02 Planner/Tasks/open/deselect-task.md" and x["on_plate"] for x in o["items"])
+    print("\n[PASS] /api/open returns plate (restoreable on view-return)" if ok
+          else "\n[FAIL] plate-restore: plate=%r items-has-on_plate=%r" % (o.get("plate"), [x["path"] for x in o["items"] if x.get("on_plate")]))
+    s, d = post("/api/plate", {"paths": []})  # reset
+except Exception as e:
+    print("\n[FAIL] plate-restore: %s: %s" % (type(e).__name__, e))
+
+# 3h) ROUND-12 CRITICAL: set_frontmatter must NOT clobber existing list tags
+#   (previously flattened tags: [a,b] -> tags:"" on every write-back). A
+#   write-back of an unrelated field must preserve tags + quoted dates + prose.
+try:
+    note2 = "02 Planner/Tasks/open/tags-test.md"
+    (Path(tmp) / "02 Planner" / "Tasks" / "open").mkdir(parents=True, exist_ok=True)
+    (Path(tmp) / note2).write_text(
+        "---\ntitle: \"tags demo\"\ntype: task\nstatus: open\nowner: hermes\ncreated: \"2026-09-14\"\ntags:\n  - home\n  - emily\n  - task\n---\n\n# tags demo\n\noriginal prose untouched\n",
+        encoding="utf-8")
+    # point the IN-PROCESS vaultlib at the temp vault (the HTTP subprocess
+    # already has VAULT_ROOT=tmp; this process's vaultlib must not touch real)
+    vaultlib.VAULT_ROOT = Path(tmp)
+    vaultlib.set_frontmatter(note2, {"status": "done"})
+    txt2 = (Path(tmp) / note2).read_text(encoding="utf-8")
+    fm2, body2 = vaultlib.split_frontmatter(txt2)
+    ok = fm2.get("tags") == ["home", "emily", "task"] \
+        and fm2.get("status") == "done" and fm2.get("created") == "2026-09-14" \
+        and "original prose untouched" in body2 \
+        and 'tags: ""' not in txt2 and (Path(tmp)/note2).name in note2
+    print("\n[PASS] set_frontmatter preserves list tags + quoted dates (tags=%r)" % fm2.get("tags") if ok
+          else "\n[FAIL] tags-clobber: tags=%r txt=%r" % (fm2.get("tags"), txt2[:200]))
+except Exception as e:
+    print("\n[FAIL] tags-clobber: %s: %s" % (type(e).__name__, e))
 
 # 4) resolve only updates frontmatter — body untouched (Original Text safe)
 try:
