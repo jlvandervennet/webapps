@@ -79,6 +79,13 @@ h1{font-size:1.55rem;letter-spacing:-.3px;font-weight:700;color:#f0f6fc;text-sha
   transition:all .1s ease}
 .cap-sel button.here{background:#21262d;color:#f0f6fc}
 .cap-sel button:active{transform:scale(.96)}
+/* Omega P1 lane selector (For Hermes / For Joe) — small sub-row under the capture bar */
+.lane-sel{display:flex;gap:6px;margin:6px 18px 0;justify-content:flex-end;flex-wrap:wrap}
+.lane-sel[hidden]{display:none}
+.lane-sel button{border:1px solid rgba(48,54,61,.6);background:rgba(33,38,45,.5);color:#8b949e;
+  font-family:inherit;font-size:.72rem;font-weight:600;min-height:30px;padding:0 12px;border-radius:9px;transition:all .1s ease}
+.lane-sel button.here{background:#21262d;border-color:rgba(88,166,255,.45);color:#58a6ff}
+.lane-sel button:active{transform:scale(.96)}
 .dump-add{flex:0 0 auto;min-width:54px;min-height:52px;border-radius:16px;background:rgba(88,166,255,.22);
   color:#58a6ff;border:1px solid rgba(88,166,255,.45);font-size:1.25rem;font-weight:700}
 /* ── NAV (one-destination-at-a-time buttons, ≥50px) ── */
@@ -261,6 +268,12 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
       autocorrect="off" autocapitalize="sentences" spellcheck="false"
       placeholder="Quick thought… type + Enter" aria-label="Quick add a thought">
     <button class="dump-add" id="quickAddBtn" aria-label="Add thought">+</button>
+  </div>
+  <!-- Omega P1 lane selector: app-inbox captures route to the BOTS by default
+       (awaiting:hermes). JOE override surfaces it on his Waiting-on-You lane. -->
+  <div class="lane-sel" id="capLaneSel" hidden>
+    <button type="button" id="capLaneHermes" class="here" data-caplane="hermes">For Hermes</button>
+    <button type="button" id="capLaneJoe" data-caplane="joe">For Joe</button>
   </div>
 </div>
 
@@ -690,9 +703,12 @@ function submitQuick(){
   }
   inp.value = '';
   inp.focus();                             // keep keyboard open for the next dump
-  // PERSIST / route: Task -> /api/add (open task), Inbox -> /api/add-capture.
+  // PERSIST / route: Task -> /api/add (open task), Inbox -> /api/add-capture
+  // with the routing lane (awaiting) — default For Hermes (bots action it).
   var endpoint = (capMode === 'inbox') ? '/api/add-capture' : '/api/add';
-  api(endpoint, {method:'POST', body:{text: text}}).then(function(r){
+  var body = {text: text};
+  if (capMode === 'inbox') body.awaiting = (typeof _capAwait==='string') ? _capAwait : 'hermes';
+  api(endpoint, {method:'POST', body: body}).then(function(r){
     if (r && r.ok){
       // refresh the surface the capture belongs to: task -> pick, inbox -> decide
       load(capMode==='inbox' ? 'decide' : 'pick');
@@ -1005,6 +1021,7 @@ document.getElementById('quickAddBtn').addEventListener('click', submitQuick);
 /* Omega P1: TASK / INBOX capture selector — one-and-done, no picker/due/NLP.
    _capMode routes the quick-capture: task -> /api/add, inbox -> /api/add-capture. */
 var _capMode = 'task';
+var _capAwait = 'hermes';   // Omega P1 lane: default For Hermes (bots action it)
 function setCapMode(mode){
   _capMode = mode;
   var sel = document.querySelectorAll('.cap-sel button');
@@ -1013,14 +1030,28 @@ function setCapMode(mode){
     sel[i].classList.toggle('here', on);
     sel[i].setAttribute('aria-checked', on ? 'true' : 'false');
   }
+  var lane = document.getElementById('capLaneSel');
+  if (lane) lane.hidden = (mode !== 'inbox');   // lane picker only for Inbox captures
   var inp = document.getElementById('quickAdd');
   inp.placeholder = (mode === 'inbox')
     ? 'Drop a link / idea / note — team will file it…'
     : 'Quick thought… type + Enter';
   inp.focus();
 }
+function setCapLane(awaiting){
+  _capAwait = awaiting;
+  var b = document.querySelectorAll('#capLaneSel button');
+  for (var i=0;i<b.length;i++){
+    var on = b[i].dataset.caplane === awaiting;
+    b[i].classList.toggle('here', on);
+  }
+}
 document.querySelectorAll('.cap-sel button').forEach(function(b){
   b.addEventListener('click', function(){ zap(); setCapMode(b.dataset.capmode); });
+});
+var _laneSel = document.getElementById('capLaneSel');
+if (_laneSel) document.querySelectorAll('#capLaneSel button').forEach(function(b){
+  b.addEventListener('click', function(){ zap(); setCapLane(b.dataset.caplane); });
 });
 
 /* tabs */

@@ -334,23 +334,48 @@ try:
 except Exception as e:
     print("\n[FAIL] quick-add round-trip: %s: %s" % (type(e).__name__, e))
 
-# 3f) ROUND-? / OMEGA P1: INBOX capture — POST /api/add-capture writes a real
-#     01 Inbox note with awaiting:joe / decision:open frontmatter (team files it).
+# 3f) OMEGA P1/CORRECTION (2026-09-15 Joe ruling): INBOX capture — POST
+#     /api/add-capture writes a real 01 Inbox note for the BOTS to action.
+#     Routing lane DEFAULT = awaiting:hermes (Hermes processes + delegates, NEVER
+#     in Joe's Waiting-on-You lane), decision:open / status:open. Original-Text
+#     intact. Low-cost selector: awaiting:hermes (default) / awaiting:joe (override).
 try:
-    s, d = post("/api/add-capture", {"text": "Omega inbox capture test idea"})
-    ok_path = d.get("ok") is True and d.get("path","").startswith("01 Inbox/")
+    orig = "Omega inbox capture test idea"
+    s, d = post("/api/add-capture", {"text": orig})
+    ok_path = d.get("ok") is True and d.get("path", "").startswith("01 Inbox/")
     new_p = Path(tmp) / d["path"]
     txt = new_p.read_text(encoding="utf-8") if new_p.exists() else ""
-    fm_in,_ = vaultlib.split_frontmatter(txt)
-    checkbox = "- [ ] Omega inbox capture test idea" in txt
+    fm_in, _ = vaultlib.split_frontmatter(txt)
+    # Original-Text intact: title + H1 + - [ ] checkbox carry the raw text, body un-mutated
+    ot = (fm_in.get("title") == orig) and ("# %s" % orig in txt) and ("- [ ] %s" % orig in txt)
     ok_fm = fm_in.get("type") == "inbox" and fm_in.get("status") == "open" \
-        and fm_in.get("awaiting") == "joe" and fm_in.get("decision") == "open" and checkbox
-    # and it now surfaces as an awaiting-Joe item (a live decision row)
+        and fm_in.get("awaiting") == "hermes" and fm_in.get("decision") == "open" and ot
+    # no-token payload: the POST response leaks no internal dev tokens
+    # (audit the payload minus the machine-only `path` write handle)
+    d_nop = {k: v for k, v in d.items() if k != "path"}
+    leak = [t for t in ["sched.py", "vaultlib", "WRITABLE_KEYS", ".md", "status:", "awaiting:"] if t in str(d_nop)]
+    # awaiting:hermes must NOT surface as an awaiting-Joe decision row (not Joe's lane)
     s2, d2 = get("/api/decide")
     in_decide = any(x.get("path") == d["path"] for x in d2["decisions"])
-    print("\n[PASS] inbox-capture writes 01 Inbox note (path=%s, fm-ok=%s, in-decide=%s)" %
-          (d.get("path"), ok_fm, in_decide) if (ok_path and ok_fm and in_decide)
-          else "\n[FAIL] inbox-capture: ok_path=%s fm=%r in_decide=%s d=%r" % (ok_path, fm_in, in_decide, d))
+    prints = (ok_path, ok_fm, not leak, not in_decide)
+
+    # JOE override via the selector: awaiting:joe -> surfaces on the Decide lane
+    s3, d3 = post("/api/add-capture", {"text": "Omega joe-lane capture test", "awaiting": "joe"})
+    ok_override = d3.get("ok") is True and d3.get("path", "").startswith("01 Inbox/")
+    pj = Path(tmp) / d3["path"]
+    fmj, _ = (vaultlib.split_frontmatter(pj.read_text(encoding="utf-8"))
+              if pj.exists() else ({}, ""))
+    joe_lane = fmj.get("awaiting") == "joe" and fmj.get("decision") == "open"
+    s4, d4 = get("/api/decide")
+    joe_in_decide = any(x.get("path") == d3["path"] for x in d4["decisions"])
+    prints2 = (ok_override, joe_lane, joe_in_decide)
+
+    ok = all(prints) and all(prints2)
+    print("\n[PASS] inbox-capture awaiting:hermes default + OT intact + no-token + NOT in Joe lane "
+          "(path=%s, acpts=%s) + JOE override=%s" %
+          (d.get("path"), prints, prints2) if ok
+          else "\n[FAIL] inbox-capture: acpts=%s joe-override=%s d=%r d3=%r fm_in=%r fmj=%r" %
+          (prints, prints2, d, d3, fm_in, fmj))
 except Exception as e:
     print("\n[FAIL] inbox-capture round-trip: %s: %s" % (type(e).__name__, e))
 

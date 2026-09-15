@@ -411,16 +411,18 @@ def add_quick_task(text):
         return {"ok": False, "output": str(e)}
 
 
-def add_inbox_capture(text):
-    """Quick-capture a line to the INBOX (Omega P1), for the team to file+act.
+def add_inbox_capture(text, awaiting="hermes"):
+    """Quick-capture a line to the INBOX (Omega P1), for the BOTS to file+act.
 
     Vault-canonical via vaultlib.create_inbox_capture — a NEW 01 Inbox capture
-    note (type:inbox / awaiting:joe / decision:open, GL-002 + Original-Text-
-    safe). Same safe-write path as create_open_task, but lands in the Inbox
-    instead of the Planner open-task dir.
+    note (type:inbox / awaiting:hermes default / decision:open, GL-002 +
+    Original-Text-safe). awaiting:hermes routes it to Hermes' processing lane
+    (NEVER Joe's Waiting-on-You); pass awaiting="joe" to override the lane.
+    Same safe-write path as create_open_task, but lands in the Inbox instead
+    of the Planner open-task dir.
     """
     try:
-        r = vaultlib.create_inbox_capture(text)
+        r = vaultlib.create_inbox_capture(text, awaiting=awaiting)
         if r.get("ok"):
             queue_vault_commit(r["path"], "Cockpit: captured to inbox – %s" % r.get("title", "capture"))
         return r
@@ -961,7 +963,8 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/add":
                 return _json(self, add_quick_task(data.get("text", "")))
             if parsed.path == "/api/add-capture":
-                return _json(self, add_inbox_capture(data.get("text", "")))
+                return _json(self, add_inbox_capture(
+                    data.get("text", ""), data.get("awaiting", "hermes")))
             if parsed.path == "/api/rename":
                 return _json(self, rename_task(data["path"], data.get("title", data.get("new_title", ""))))
             if parsed.path == "/api/calendar/update":

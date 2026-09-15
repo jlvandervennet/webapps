@@ -310,19 +310,23 @@ OPEN_TASKS_DIR = VAULT_ROOT / "02 Planner" / "Tasks" / "open"
 INBOX_DIR = VAULT_ROOT / "01 Inbox"
 
 
-def create_inbox_capture(text: str) -> dict:
-    """Create a NEW 01 Inbox capture note (awaiting:joe) — Omega quick-capture.
+def create_inbox_capture(text: str, awaiting: str = "hermes") -> dict:
+    """Create a NEW 01 Inbox capture note (awaiting:hermes) — Omega quick-capture.
 
-    Joe drops a link / project idea / research topic; the team files + acts on
-    it. Writes a genuine `type: inbox` / `awaiting: joe` / `decision: open`
-    capture note under `01 Inbox/` with GL-002 frontmatter so it can be
-    resolved like any decision and so the fleet's decision surface sees it.
+    Joe drops a link / project idea / research topic — a note for the BOTS to
+    action, NOT a task for Joe. So the routing lane (awaiting:) defaults to
+    HERMES (Hermes processes + delegates, never in Joe's Waiting-on-You lane),
+    with a low-cost JOE override available via the `awaiting` param. Writes a
+    genuine `type: inbox` / `awaiting: hermes` / `decision: open` / `status:
+    open` capture note under `01 Inbox/` with GL-002 frontmatter. Only the
+    `awaiting` value changes the lane; everything else is the same for both.
     The quick text is recorded BOTH as `title` AND as a `- [ ] <text>` checkbox
     in the body (Joe's requested format). New note only — never mutates an
     existing note/body (Original-Text-safe).
     """
     from datetime import date as _date
     text = (text or "").strip()
+    awaiting = (awaiting or "hermes").strip().lower() in ("joe",) and "joe" or "hermes"
     if not text:
         raise ValueError("empty capture text")
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40] or "capture"
@@ -337,7 +341,7 @@ def create_inbox_capture(text: str) -> dict:
         "type: inbox",
         "owner: hermes",
         "status: open",
-        "awaiting: joe",
+        "awaiting: %s" % awaiting,
         "decision: open",
         'created: "%s"' % _date.today().isoformat(),
         FM_CLOSE,
