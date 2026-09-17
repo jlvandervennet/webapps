@@ -234,6 +234,26 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
   box-shadow:0 10px 28px rgba(0,0,0,.55);animation:toast-in .25s ease}
 .undo-msg{flex:1;font-size:.95rem;color:var(--text-primary);word-wrap:break-word;overflow-wrap:break-word}
 @keyframes toast-in{from{transform:translateY(18px);opacity:0}to{transform:translateY(0);opacity:1}}
+/* ROUND-22 (Omega stale-auth hardening): PERSISTENT re-auth banner — does NOT
+   auto-dismiss (a transient alert is exactly what got dismissed while the
+   write silently dropped). Routes to the auth modal via its button. */
+.auth-banner{position:fixed;left:0;right:0;top:0;z-index:70;
+  display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;
+  padding:12px 16px;background:#3a1d1d;border-bottom:1px solid #8b3a3a;
+  box-shadow:0 6px 18px rgba(0,0,0,.4);text-align:center}
+.auth-banner.hidden{display:none}
+.auth-banner .ab-msg{font-size:.92rem;color:#ffd9d9}
+.auth-banner .ab-btn{background:#6e2b2b;color:#ffd9d9;border:1px solid #a04747;
+  border-radius:10px;padding:8px 16px;font-size:.9rem;font-weight:600}
+.auth-banner .ab-btn:active{transform:scale(.98)}
+/* ROUND-22: custom in-theme AUTH modal (replaces the native password prompt —
+   round-14 "no native dialog" rule; the task required routing to the prompt). */
+.auth-modal{display:none}
+.auth-modal.modal-active{display:flex}
+.auth-modal input[type=password],.auth-modal input[type=text]{
+  width:100%;box-sizing:border-box;padding:12px 14px;border-radius:10px;
+  border:1px solid var(--border-subtle);background:#0d1117;color:var(--text-primary);
+  font-size:1rem;margin:14px 0 6px}
 @media (min-width:700px){ body{font-size:1rem} }
 </style>
 </head>
@@ -248,6 +268,26 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
     <div class="modal-actions">
       <button id="confirmCancel" class="modal-btn modal-bt-cancel" data-act="confirmdismiss">Cancel</button>
       <button id="confirmOk" class="modal-btn modal-bt-confirm" data-act="confirmok">Book It</button>
+    </div>
+  </div>
+</div>
+
+<!-- ROUND-22 (Omega hardening): PERSISTENT re-auth banner — shown when writes
+     start 401ing on a stale token; routes to the auth modal. Never auto-hides. -->
+<div id="authBanner" class="auth-banner hidden" role="alert" aria-live="assertive">
+  <span class="ab-msg">Connection needs re-authentication — your changes didn't save.</span>
+  <button class="ab-btn" data-act="reauth">Re-enter password</button>
+</div>
+
+<!-- ROUND-22: custom in-theme AUTH modal (replaces native password prompt). -->
+<div id="authModal" class="modal auth-modal" aria-hidden="true">
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <div id="authTitle" class="modal-title">Cockpit password</div>
+    <input id="authPass" type="password" autocomplete="current-password"
+      autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Password">
+    <div class="modal-actions">
+      <button id="authCancel" class="modal-btn modal-bt-cancel" data-act="authdismiss">Cancel</button>
+      <button id="authOk" class="modal-btn modal-bt-confirm" data-act="authconfirm">Unlock</button>
     </div>
   </div>
 </div>
@@ -355,21 +395,58 @@ function bumpHaptic(){                       // navigator.vibrate(15) safe-guard
 }
 function zap(){ tapTone(); bumpHaptic(); }   // call on check-off / Enter
 
-/* auth + api unchanged (vault-canonical reads/writes, do not rewire) */
-function setAuth(){
-  var t = prompt('Cockpit password:');
+/* ROUND-22 (Omega stale-auth hardening): auth + api.
+   Reads are auth-free but WRITES 401 on a stale `cockpit_auth` token — so an
+   old token silently dropped every pick/schedule/book while the optimistic UI
+   claimed success. New behavior:
+   - setAuth() opens a custom in-theme auth modal (no native prompt — round-14
+     hard rule) and stores the fresh token.
+   - api() tracks WRITE 401s. Reads never 401, so a write 401 is the ONLY
+     signal. On AUTHGATE consecutive write 401s it raises the PERSISTENT
+     re-auth banner (never auto-dismiss — a transient alert got dismissed
+     while the write dropped silently). A successful write clears the run.
+   - Once the banner is up, write call-sites revert their optimistic claim
+     (reload from the server) instead of leaving a fake "saved/Booked". */
+var _authFails = 0;
+var AUTHGATE = 2;                 // consecutive write 401s before the banner locks
+function showAuthBanner(show){
+  var b = document.getElementById('authBanner');
+  if (b) b.classList.toggle('hidden', !show);
+}
+function openAuthModal(){
+  var m = document.getElementById('authModal');
+  var p = document.getElementById('authPass');
+  if (m && p){ m.classList.add('modal-active'); m.setAttribute('aria-hidden','false'); setTimeout(function(){ p.focus(); }, 30); }
+}
+function closeAuthModal(){
+  var m = document.getElementById('authModal');
+  if (m){ m.classList.remove('modal-active'); m.setAttribute('aria-hidden','true'); }
+}
+function setAuth(){ openAuthModal(); }
+function commitAuth(t){
   if (!t) return;
   AUTH = t; localStorage.setItem('cockpit_auth', t);
+  _authFails = 0;                       // fresh token — clears the failure run
+  showAuthBanner(false);                // drop the persistent notice
+  closeAuthModal();
   load();
 }
 function api(path, opts){
   opts = opts || {};
+  var isWrite = opts.method === 'POST';
   var headers = {'Content-Type':'application/json'};
   if (AUTH) headers['X-Cockpit-Auth'] = AUTH;
   if (opts.body) opts.body = JSON.stringify(opts.body);
   opts.headers = headers;
   return fetch(path, opts).then(function(r){
-    if (r.status === 401){ setAuth(); throw new Error('auth'); }
+    if (r.status === 401){
+      if (isWrite){
+        _authFails++;
+        if (_authFails >= AUTHGATE) showAuthBanner(true);  // persistent
+      }
+      throw new Error('auth');
+    }
+    if (isWrite) { _authFails = 0; showAuthBanner(false); }  // landed write proves the token works
     return r.json();
   });
 }
@@ -634,7 +711,10 @@ function savePick(paths){
       alert('Couldn’t save your plate — try again.');
     }
   }).catch(function(){
-    alert('Couldn’t save your plate — check the connection and try again.');
+    // write failed (incl. 401 — ROUND-22 guard): never leave an optimistic
+    // pick claimed. Reads are auth-free, so reload the authoritative plate
+    // and re-render honestly (the banner routes the user to re-auth).
+    api('/api/open').then(renderPick).catch(function(){ load('pick'); });
   });
 }
 
@@ -770,6 +850,15 @@ document.addEventListener('click', function(ev){
     return;
   } else if (act==='confirmdismiss'){
     dismissConfirm(); return;
+  } else if (act==='reauth'){
+    openAuthModal(); return;
+  } else if (act==='authdismiss'){
+    closeAuthModal(); return;
+  } else if (act==='authconfirm'){
+    var ap = document.getElementById('authPass');
+    commitAuth(ap ? ap.value : '');
+    if (ap) ap.value = '';
+    return;
   }
   if (act==='pick'){
     if (plate_full()){ alert('Your plate is full — finish one of the 3 first.'); return; }
@@ -801,7 +890,7 @@ document.addEventListener('click', function(ev){
         api('/api/rename',{method:'POST',body:{path:path, title:val}}).then(function(r){
           if (r && r.ok){ load('pick'); }
           else { alert((r&&r.output)||'Couldn’t rename that.'); load('pick'); }
-        });
+        }).catch(function(){ load('pick'); });   // ROUND-22
       } else {
         load('pick');
       }
@@ -838,6 +927,8 @@ document.addEventListener('click', function(ev){
       }
       else if (r && r.deduped){ load(); refreshCounter(); }
       else { alert((r&&r.output) || 'Couldn’t mark that done.'); load(); }
+    }).catch(function(){          // ROUND-22: 401/network — un-claim the optimistic Done
+      load('pick'); refreshCounter();
     });
   } else if (act==='undo'){
     // ROUND-12 fix#2: reverse a completion — reopen the task + remove its /done
@@ -845,17 +936,17 @@ document.addEventListener('click', function(ev){
       if (r && r.ok){ load('pick'); refreshCounter(); }
       else if (r && r.not_done){ load('pick'); refreshCounter(); }
       else { alert((r&&r.output) || 'Couldn’t undo that.'); load('pick'); }
-    });
+    }).catch(function(){ load('pick'); refreshCounter(); });   // ROUND-22
   } else if (act==='accept'){
-    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); });
+    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); }).catch(function(){ load('decide'); refreshCounter(); });
   } else if (act==='resolve'){
-    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); });
+    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); }).catch(function(){ load('decide'); refreshCounter(); });
   } else if (act==='retry'){
     load();
   } else if (act==='rebase'){
     var d = prompt('New decide-by date (YYYY-MM-DD):');
     if (!d) return;
-    api('/api/set-due',{method:'POST',body:{path:path,due:d}}).then(function(){ load('decide'); });
+    api('/api/set-due',{method:'POST',body:{path:path,due:d}}).then(function(){ load('decide'); }).catch(function(){ load('decide'); });   // ROUND-22
   } else if (act==='bump'){
     // ROUND-8: open the nudge sheet (quick picks, no raw date prompt)
     document.getElementById('bumpTitle').textContent = path.split('/').pop();
@@ -883,7 +974,7 @@ document.addEventListener('click', function(ev){
     api('/api/set-due',{method:'POST',body:{path:path, due:target}}).then(function(){
       alert('Moved — still on your plate, now due ' + target + '.');
       load('pick');
-    });
+    }).catch(function(){ load('pick'); });   // ROUND-22
   } else if (act==='book'){
     var title=b.dataset.title,date=b.dataset.date,start=b.dataset.start,end=b.dataset.end;
     // ROUND-14: custom modal replaces window.confirm (native popup was jarring on iOS).
@@ -900,6 +991,8 @@ document.addEventListener('click', function(ev){
         target.style.opacity = .6;
         api('/api/book',{method:'POST',body:{summary:title,start:date+'T'+start,end:date+'T'+end}}).then(function(r){
           if(!r.ok){ target.textContent = 'Book again'; target.disabled=false; target.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
+        }).catch(function(){   // ROUND-22: 401/network — un-claim the optimistic book
+          target.textContent = 'Book again'; target.disabled=false; target.style.opacity=1;
         });
       });
   } else if (act==='planresched'){
@@ -963,7 +1056,7 @@ document.addEventListener('click', function(ev){
               .then(function(ur){ if(ur && !ur.ok){ /* calendar couldn't update; vault IS updated */ } })
               .catch(function(){});
           }
-        });
+        }).catch(function(){ load('plan'); b.textContent = cur; });   // ROUND-22
       }
     };
     var onKey = function(e){
@@ -996,13 +1089,13 @@ document.addEventListener('click', function(ev){
     b.textContent = '✓ Booked'; b.disabled = true; b.style.opacity = .6;
     api('/api/book',{method:'POST',body:{summary:t,start:day+'T'+ss,end:day+'T'+ee}}).then(function(r){
       if(!r.ok){ b.textContent = 'Book it'; b.disabled=false; b.style.opacity=1; alert(r.output||'Couldn’t book that one.'); }
-    });
+    }).catch(function(){ b.textContent = 'Book it'; b.disabled=false; b.style.opacity=1; });   // ROUND-22
   } else if (act==='pickday'){
     var t=b.dataset.title; var d=prompt('Which day? (YYYY-MM-DD)');
     if(!d) return;
     api('/api/book',{method:'POST',body:{summary:t,start:d+'T09:00',end:d+'T09:30'}}).then(function(r){
       alert(r.ok ? 'Booked — on your calendar ✓' : (r.output||'Couldn’t book that one.'));
-    });
+    }).catch(function(){ /* ROUND-22: banner already surfaced the 401 */ });
   } else if (act==='togglerest'){
     var now = localStorage.getItem('cockpit_showrest') === '1';
     localStorage.setItem('cockpit_showrest', now ? '0' : '1');
@@ -1017,6 +1110,15 @@ document.getElementById('quickAdd').addEventListener('keydown', function(e){
 });
 document.getElementById('quickAdd').addEventListener('input', function(){});
 document.getElementById('quickAddBtn').addEventListener('click', submitQuick);
+
+/* ROUND-22: Enter in the auth modal unlocks (mirrors the quick-add Enter). */
+(function(){
+  var ap = document.getElementById('authPass');
+  if (ap) ap.addEventListener('keydown', function(e){
+    if (e.key === 'Enter' || e.keyCode === 13){ commitAuth(ap.value); ap.value = ''; }
+    else if (e.key === 'Escape' || e.keyCode === 27){ closeAuthModal(); }
+  });
+})();
 
 /* Omega P1: TASK / INBOX capture selector — one-and-done, no picker/due/NLP.
    _capMode routes the quick-capture: task -> /api/add, inbox -> /api/add-capture. */

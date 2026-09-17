@@ -100,7 +100,10 @@ def queue_vault_commit(rel_path, message):
             _autocommit_timer.daemon = True
             _autocommit_timer.start()
 
-TODAY = date.today().isoformat()
+def _today():
+    """Resolve today's date per-request (was a frozen module constant — the
+    long-lived container answered stale dates past midnight)."""
+    return date.today().isoformat()
 
 
 def _dt(v):
@@ -130,7 +133,7 @@ def _today_done_titles():
                     rec = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if rec.get("date") != TODAY:
+                if rec.get("date") != _today():
                     continue
                 t = (rec.get("task") or "").strip()
                 if not t:
@@ -140,7 +143,7 @@ def _today_done_titles():
         pass
     # source 2: today's daily checked Done boxes
     try:
-        p = VAULT / "00 Daily Scratchpad" / ("%s.md" % TODAY)
+        p = VAULT / "00 Daily Scratchpad" / ("%s.md" % _today())
         if p.is_file():
             text = p.read_text(encoding="utf-8", errors="replace")
             in_done = False
@@ -166,7 +169,7 @@ def _today_done_titles():
 def get_today():
     """Counter: number of UNIQUE things done today (deduped). Always real."""
     done = _today_done_titles()
-    return {"date": TODAY, "done_count": len(done), "done_titles": done}
+    return {"date": _today(), "done_count": len(done), "done_titles": done}
 
 
 def get_open_items():
@@ -485,7 +488,7 @@ def revert_done(path):
         pass
     # 3) strip the matching daily ✅ Done line (best-effort, exact title match)
     try:
-        daily = VAULT / "00 Daily Scratchpad" / ("%s.md" % TODAY)
+        daily = VAULT / "00 Daily Scratchpad" / ("%s.md" % _today())
         if daily.is_file():
             txt = daily.read_text(encoding="utf-8", errors="replace")
             kept = [l for l in txt.splitlines()
