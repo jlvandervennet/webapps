@@ -690,7 +690,7 @@ function flipPlate(path, add){
   if (_openCache){ _openCache.plate = plate.slice(); _openCache.plate_full = plate.length>=3; }
   savePlateLS();                         // ROUND-12: persist locally too
   renderPick(_openCache);                // light rebuild from cache (no fetch)
-  document.getElementById('plateCount').textContent = plate.length;
+  renderPlate();                         // guarded count update (fix: no unguarded plateCount)
 }
 
 /* ROUND-13 (pick-persist bug): PERSIST the plate to the server and make the
@@ -707,7 +707,7 @@ function savePick(paths){
       if (_openCache){ _openCache.plate = r.plate.slice(); _openCache.plate_full = r.plate.length>=3; }
       savePlateLS();
       renderPick(_openCache);
-      document.getElementById('plateCount').textContent = plate.length;
+      renderPlate();                     // guarded count update (fix: no unguarded plateCount)
     } else {
       alert('Couldn’t save your plate — try again.');
     }
