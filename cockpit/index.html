@@ -208,6 +208,7 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
 .plate{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.86rem;color:#8b949e}
 .plate .n{font-weight:800;color:var(--accent-focus);font-size:1.05rem}
 .footer{color:#6e7681;font-size:.7rem;text-align:center;padding:24px 0 4px}
+.ver-tag{color:#8b949e;opacity:.75;font-family:ui-monospace,monospace;font-size:.62rem}
 /* pick-3 mode: hide the bulk of the vault list — one thing at a time */
 #pickBody.flush{max-height:22.5rem;overflow:hidden;position:relative}
 #pickBody.flush:after{content:'';position:absolute;inset:0;pointer-events:none}
@@ -357,7 +358,7 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
   </div>
 </div>
 
-<p class="footer">Joe's Cockpit · thin window over the vault</p>
+<p class="footer">Joe's Cockpit · thin window over the vault · <span id="verTag" class="ver-tag">v12</span></p>
 
 <!-- ROUND-12 fix#2: Undo toast (fades after ~5s) -->
 <div id="undoToast" class="undo-toast" style="display:none" role="status" aria-live="polite">
