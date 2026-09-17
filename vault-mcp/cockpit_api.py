@@ -924,7 +924,22 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        pass  # quiet
+        # Observability (omega pick-persist reopen): this was `pass # quiet` —
+        # a blind spot that let 9 frontend-guessing fixes ship. Log every
+        # request: METHOD path auth -> status, so a failing write is visible.
+        try:
+            meth = getattr(self, "command", "?")
+            pth = getattr(self, "path", "?")
+            code = ""
+            if len(args) >= 2 and str(args[1]).isdigit():
+                code = " -> " + str(args[1])
+            auth = ""
+            if meth == "POST":
+                tok = self.headers.get("X-Cockpit-Auth", "") if hasattr(self, "headers") else ""
+                auth = " auth=" + ("OK" if tok == PASSWORD else ("BAD" if tok else "MISSING"))
+            sys.stderr.write("[cockpit-req] %s %s%s%s\n" % (meth, pth, auth, code))
+        except Exception:
+            pass
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -982,7 +997,10 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/set-due":
                 return _json(self, set_due(data["path"], data["due"]))
             if parsed.path == "/api/plate":
-                _plate_out = vaultlib.set_plate(data.get("paths", []))
+                _sent = data.get("paths", [])
+                sys.stderr.write("[cockpit-plate] POST paths=%r\n" % (_sent,))
+                _plate_out = vaultlib.set_plate(_sent)
+                sys.stderr.write("[cockpit-plate] -> persisted=%r\n" % (_plate_out.get("plate"),))
                 queue_vault_commit("02 Planner/_ Active Plate.md", "Cockpit: plate updated")
                 return _json(self, _plate_out)
             if parsed.path == "/api/resolve":
