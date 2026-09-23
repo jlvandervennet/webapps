@@ -14,6 +14,7 @@ Stdlib only (http.server). No secrets in code; password via env.
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -298,6 +299,7 @@ def get_decide():
         # any explicit frontmatter options.
         options = []
         lean = (d.get("default") or "").strip()
+        ctx = {}
         try:
             note = vaultlib.read_note(d["path"])
             body = note.get("body") or ""
@@ -309,6 +311,9 @@ def get_decide():
                 options = [str(o).strip() for o in fm["options"] if str(o).strip()]
             if not lean and parsed_lean:
                 lean = parsed_lean
+            # PRD §2 "context surface": what's being asked (BLUF lead), why-now
+            # (leading sentence VERBATIM, no LLM), source + related, all proxied.
+            ctx = _extract_decision_context(fm, body)
         except Exception:
             options = []
         rows.append({
@@ -320,9 +325,149 @@ def get_decide():
             "options": options[:3],          # the 3 options, if present
             "has_options": len(options) > 0,
             "path": d["path"],               # machine handle only
+            # PRD §2 context surface — all plain-English, no raw tokens.
+            "ask": ctx.get("ask", ""),            # what's being asked (BLUF lead)
+            "why_now": ctx.get("why_now", ""),    # leading sentence verbatim
+            "source": ctx.get("source", ""),      # source caption
+            "related": ctx.get("related", []),    # related note titles
+            "can_view_full": ctx.get("can_view_full", False),
         })
     # 'coming up' preview: next decide-by / soonest dated open items.
     return {"cleared": len(rows) == 0, "decisions": rows, "coming_up": _next_up()}
+
+
+def _extract_decision_context(fm, body):
+    """PRD §2 context surface — every field plain-English, NEVER a raw dump.
+
+    - ask:      the note's BLUF/recommendation lead (first real prose line),
+                hard-truncated ~1-2 lines.
+    - why_now:  the leading sentence VERBATIM, a plain-text cut (NO LLM).
+    - source:   `source:` frontmatter caption, brackets stripped.
+    - related:  `related`/wikilink titles, deduped.
+    - can_view_full: true when there is a body worth opening in-app.
+    """
+    ask = _bluf_lead(body)
+    why_now = _leading_sentence(body)
+    src = str(fm.get("source") or "").strip("[]").strip()
+    related = []
+    for k in ("related", "related_topics"):
+        v = fm.get(k)
+        if isinstance(v, list):
+            for x in v:
+                related.append(str(x).strip("[]").strip())
+        elif v:
+            related.append(str(v).strip("[]").strip())
+    # also pick up body wikilinks so a source-carrying body still links out
+    rel_txt = body or ""
+    for m in re.finditer(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", rel_txt):
+        t = m.group(1).strip()
+        if t and t not in related:
+            # skip section/heading anchors (down the page), keep note titles
+            related.append(t)
+    seen, uniq = set(), []
+    for r in related:
+        if r and r not in seen:
+            seen.add(r)
+            uniq.append(r)
+    has_body = bool((body or "").strip())
+    return {
+        "ask": ask,
+        "why_now": why_now,
+        "source": src,
+        "related": uniq[:6],
+        "can_view_full": has_body,
+    }
+
+
+def _bluf_lead(body):
+    """First meaningful prose line = the recommendation/BLUF lead, truncated.
+
+    Prefers a bolded recommendation/BLUF line (e.g. `**Recommendation: ...**`),
+    falling back to the first non-furniture prose line. Raw text only.
+    """
+    lines = (body or "").splitlines()
+    fallback = ""
+    for line in lines:
+        s = line.strip()
+        if not s or s.startswith(("#", ">", "|", "```", "[^", "<!--")):
+            continue
+        if s.startswith("- ") or s.startswith("* "):
+            continue
+        if s.startswith("**") and ("recommend" in s.lower() or "bluf" in s.lower() or "default" in s.lower()):
+            return _cut_line(s.strip("*").strip(), 160)
+        if not fallback:
+            fallback = _cut_line(s, 160)
+    return fallback
+
+
+def _leading_sentence(body):
+    """First sentence of the body, VERBATIM (plain-text cut, no synthesis).
+
+    Prefers the note's "why it matters now" / "the fork" / hold-point reason
+    section (heading containing why|fork|hold|matter) — those words literally
+    say why the fork exists this moment. Falls back to the note's first
+    substantive prose line. Always the RAW leading substring, never rewording,
+    truncated to ~1-2 lines. Grill ruling 5: verbatim only, NO LLM.
+    """
+    lines = (body or "").splitlines()
+    prefs = []
+    fallback = ""
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith(("#", ">", "-", "*", "|", "```", "!")):
+            continue
+        if s.startswith("**") and s.rstrip().endswith("**"):
+            continue  # bold leader, not the reason sentence
+        if s.startswith("**"):
+            continue
+        if not fallback:
+            fallback = _cut_line(s, 160)
+        # a heading right above announces the why-now section
+        if i > 0 and lines[i - 1].strip().startswith("#"):
+            head = lines[i - 1].strip().lstrip("#").lower()
+            if any(w in head for w in ("why", "fork", "hold", "matter", "reason")):
+                prefs.append(_cut_line(s, 160))
+    if prefs:
+        return prefs[0]
+    return fallback
+
+
+def _cut_line(s, limit):
+    s = re.sub(r"\s+", " ", s).strip()
+    if len(s) <= limit:
+        return s
+    # hard-truncate on a word boundary near the limit (still plain text)
+    cut = s[:limit]
+    idx = cut.rfind(" ")
+    return (cut[:idx] if idx > 40 else cut).rstrip() + "…"
+
+
+def get_decision_item(path):
+    """Read-only proxy of ONE decision note's full body for the in-app
+    'see the full item' open (PRD §5). Frontend calls with the machine `path`
+    handle; backend validates it names a live awaiting-joe decision so the UI
+    never renders raw internals. Never writes.
+    """
+    try:
+        note = vaultlib.read_note(path)
+    except Exception:
+        return {"ok": False, "error": "Couldn’t open that item."}
+    fm = note.get("frontmatter") or {}
+    body = note.get("body") or ""
+    ctx = _extract_decision_context(fm, body)
+    return {
+        "ok": True,
+        "path": path,
+        "title": (fm.get("title") or path).strip(),
+        "ask": ctx["ask"],
+        "why_now": ctx["why_now"],
+        "source": ctx["source"],
+        "related": ctx["related"],
+        "decide_by": _plain_date(fm.get("do-by") or fm.get("due")),
+        "body": body.strip(),
+    }
 
 
 def _parse_decision_options(body: str):
@@ -414,23 +559,208 @@ def add_quick_task(text):
         return {"ok": False, "output": str(e)}
 
 
-def add_inbox_capture(text, awaiting="hermes"):
-    """Quick-capture a line to the INBOX (Omega P1), for the BOTS to file+act.
+# Ω Omega v15: INBOX quick-capture → KANBAN TRIAGE (not a vault inbox note).
+# Joe drops a deep idea / research thing / video → this creates a kanban
+# triage card assigned to hermes on the work board, so Hermes (orchestrator)
+# decomposes, scopes, assigns, routes — instead of an 01 Inbox note. The
+# route uses the SAME engine the fleet dispatcher reads, and the raw captured
+# text rides UNEDITED (Original-Text-safe). The JOE approval lane
+# (awaiting:joe) is unchanged: still a real 01 Inbox note awaiting Joe.
+KANBAN_HERMES_BIN = os.environ.get("KANBAN_HERMES_BIN", "/usr/local/bin/hermes")
+KANBAN_DB = os.environ.get("KANBAN_DB", "/opt/data/kanban.db")
+KANBAN_TENANT = os.environ.get("KANBAN_TENANT", "work")
+KANBAN_ASSIGNEE = os.environ.get("KANBAN_ASSIGNEE", "hermes")
 
-    Vault-canonical via vaultlib.create_inbox_capture — a NEW 01 Inbox capture
-    note (type:inbox / awaiting:hermes default / decision:open, GL-002 +
-    Original-Text-safe). awaiting:hermes routes it to Hermes' processing lane
-    (NEVER Joe's Waiting-on-You); pass awaiting="joe" to override the lane.
-    Same safe-write path as create_open_task, but lands in the Inbox instead
-    of the Planner open-task dir.
+
+def _create_kanban_triage(text: str) -> dict:
+    """Create a kanban triage card for Hermes on the work board (Ω v15).
+
+    Original-Text-safe: the raw capture rides UNEDITED as the card title and
+    body; only a ``source: omega-capture`` tag is appended to the body (the
+    card's stated seam). Pins HERMES_HOME + HERMES_KANBAN_DB on the subprocess
+    so the create lands in the live engine DB regardless of the container's
+    ambient env (the cockpit-api container sets neither).
     """
+    text = (text or "").strip()
+    title = text[:120] or "untitled capture"
+    body = text + "\n\nsource: omega-capture"
+    env = dict(os.environ)
+    env["HERMES_HOME"] = "/opt/data"
+    # Live env wins so an isolated instance / test can repoint the engine DB
+    # without a re-import (defaults to the module global captured at import).
+    env["HERMES_KANBAN_DB"] = os.environ.get("KANBAN_DB", "") or KANBAN_DB
+    # Scrub dispatch-child guards defensively — the production cockpit-api
+    # process doesn't carry them, but a restart from a dispatcher context
+    # must never leak them into the subprocess (that blocks kanban CLI writes).
+    for _k in ("HERMES_SUPERVISED_CHILD", "HERMES_DELEGATED_CHILD_CONTEXT",
+               "HERMES_S6_SUPERVISED_CHILD", "HERMES_KANBAN_TASK"):
+        env.pop(_k, None)
+    cmd = [KANBAN_HERMES_BIN, "kanban", "create", "--tenant", KANBAN_TENANT,
+           "--assignee", KANBAN_ASSIGNEE, "--triage", "--body", body,
+           "--json", title]
     try:
-        r = vaultlib.create_inbox_capture(text, awaiting=awaiting)
-        if r.get("ok"):
-            queue_vault_commit(r["path"], "Cockpit: captured to inbox – %s" % r.get("title", "capture"))
-        return r
-    except ValueError as e:
-        return {"ok": False, "output": str(e)}
+        r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=30)
+    except FileNotFoundError:
+        return {"ok": False, "output": "Couldn't save — the triage board wasn't reachable."}
+    if r.returncode != 0:
+        return {"ok": False, "output": "Couldn't save that one — the board didn't accept it."}
+    try:
+        card = json.loads((r.stdout or "").strip() or "{}")
+    except json.JSONDecodeError:
+        return {"ok": False, "output": "Couldn't save that one — unexpected reply from the board."}
+    card_id = card.get("id")
+    if not card_id:
+        return {"ok": False, "output": "Couldn't save that one — no card came back."}
+    return {"ok": True, "id": card_id, "card_id": card_id, "title": title,
+            "source": "omega-capture",
+            "output": "Captured — triage card created for Hermes to route."}
+
+
+def add_inbox_capture(text, awaiting="hermes"):
+    """Quick-capture a line (Ω v15): INBOX toggle → kanban triage card.
+
+    awaiting:hermes (the default / For-Hermes lane) → a kanban triage card
+    assigned to hermes on the work board, so Hermes the orchestrator
+    decomposes, scopes, assigns and routes the capture. NOT a belt-and-
+    suspenders inbox note. awaiting:joe (approval lane) is UNCHANGED: still a
+    real 01 Inbox note awaiting Joe (per Omegga v15 OUT). Original-Text-safe:
+    the raw capture rides unedited (title + body).
+    """
+    text = (text or "").strip()
+    if not text:
+        return {"ok": False, "output": "empty capture text"}
+    lane = (awaiting or "hermes").strip().lower() in ("joe",) and "joe" or "hermes"
+    if lane == "joe":
+        # approval lane unchanged — keep the inbox-note path for awaiting:joe
+        try:
+            r = vaultlib.create_inbox_capture(text, awaiting="joe")
+            if r.get("ok"):
+                queue_vault_commit(r["path"], "Cockpit: captured to inbox – %s" % r.get("title", "capture"))
+            return r
+        except ValueError as e:
+            return {"ok": False, "output": str(e)}
+    # default For-Hermes lane → kanban triage card (Ω v15)
+    return _create_kanban_triage(text)
+
+
+# ── Ωv17 "In the works" strip — LIVE MIRROR of the board's active lanes ────
+# A thin READ-ONLY strip folded under the capture bar. Per Joe's observed gap
+# (2026-09-23) it is NOT limited to app-dropped triage — it mirrors EVERY
+# non-terminal card on the work board (any assignee) that sits in an ACTIVE
+# section, each labeled with its REAL kanban section, live-updated. App-dropped
+# triage is already a board card (v15 INBOX→kanban intake), so it shows exactly
+# like any other in-progress card. Reads the SAME kanban DB the fleet writes.
+# PURE READ — mode=ro sqlite, no writes, no new schema/table.
+#
+# Active section → label (the strip shows the ACTUAL board section verbatim):
+#   triage/todo/ready/running/scheduled → the section word (real status)
+#   review                              → "review"  (+ flagged needs-you, via Decide)
+#   blocked (needs a real Joe action)   → "blocked" (+ flagged needs-you)
+#   blocked (dependency/transient)      → "blocked" shown, NOT needs-you (these
+#                                          resolve themselves without Joe's gaze)
+#   done                                → folds into "recently filed"
+#   archived                            → drops off the mirror
+# `needs` is set ONLY for review / blocked(joe kinds) — the "See what needs
+# you" affordance + the awaiting-Joe surfacing depend on it.
+#
+# NOISE GUARD (per Joe, 2026-09-23): pure bot-automation backfill (nightly
+# zone sweeps, silent data writes) is kept visible (nothing hidden — it IS
+# board work) but rendered dimmer via the `auto` flag when it carries a clear
+# automation seam (source: silent/automation/cron, or the recognizable
+# nightly/*sweep pattern) so a real flood reads quieter than Joe's work. The
+# strip mirrors ALL active cards; if automation ever genuinely floods it, that
+# decision is surfaced to Joe rather than auto-guessed away.
+KANBAN_ACTIVE = ("triage", "todo", "ready", "running", "scheduled",
+                 "review", "blocked")
+KANBAN_BLOCKED_JOE_KINDS = ("needs_input", "capability", "gave_up",
+                            "block_loop_detected")
+
+
+def _triage_scrub(text: str) -> str:
+    """Cap + de-crud a card's title for the strip. Never leaks a token — no
+    `t_…` card id, no `.md`, no `source:` label, no file path. (The section
+    word IS the point of the strip now, so status is surfaced deliberately —
+    but never a card id / raw path / token.)"""
+    t = re.sub(r"\s+", " ", (text or "")).strip()
+    t = re.sub(r"\bt_[A-Za-z0-9]+\b", "", t)          # card ids
+    t = re.sub(r"\.md\b", "", t)                       # note suffixes
+    t = re.sub(r"(?i)\b(?:source|path)\s*[:=\-]\s*\S+", "", t)  # seams
+    t = re.sub(r"\s{2,}", " ", t).strip(" -–—.:")
+    if len(t) > 60:
+        t = t[:57].rstrip() + "…"
+    return t or "a capture"
+
+
+def _auto_backfill(row) -> bool:
+    """True when a card is recognizably pure bot-automation backfill: either an
+    explicit seam marker (`source: silent/automation/cron/backfill`) or the
+    distinctive silent-sweep title pattern (nightly/zone/auto … sweep/cleanup/
+    backfill). Honest automation stays VISIBLE — we only dim it, never exclude.
+    A card with any human-decision surface (review, blocked-joe, app drop) reads
+    as real regardless of this flag (the strip's needs-you logic is separate)."""
+    hay = ((row["body"] or "") + " " + (row["title"] or "")).lower()
+    if re.search(r"\bsource:\s*(silent|automation|cron|backfill)\b", hay):
+        return True
+    if re.search(r"\b(?:nightly|zone|auto)[^.\n]{0,25}\b(?:sweep|cleanup|backfill)\b", hay):
+        return True
+    return False
+
+
+def get_triage_flow() -> dict:
+    """Live mirror of the work board's active lanes (Ωv17). Pure read of the
+    live kanban DB — NO app-drop filter, ANY assignee.
+
+    Returns proxied buckets the strip renders with no developer-crud:
+      {ok, count, in_flight, needs_you, recent_filed, empty_last_filed}
+    `count` is the "in the works" header count (every active card). Each active
+    item is {title (≤60, scrubbed), section (real kanban section verbatim),
+    needs (review / blocked-joe ⇒ already surfaced to the awaiting-Joe lane),
+    auto (dim-worthy bot-automation backfill)}. Read-only sqlite open (mode=ro)
+    so the strip can never lock or mutate the fleet board.
+    """
+    db = os.environ.get("KANBAN_DB", "") or KANBAN_DB
+    tenant = KANBAN_TENANT
+    active, needs, filed = [], [], []
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=3)
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT title, body, status, assignee, block_kind FROM tasks "
+            "WHERE tenant = ? AND status != 'archived' "
+            "ORDER BY created_at DESC, id DESC LIMIT 400",
+            (tenant,),
+        ).fetchall()
+        con.close()
+    except Exception:
+        return {"ok": False, "count": 0, "in_flight": [], "needs_you": [],
+                "recent_filed": [], "empty_last_filed": ""}
+    for row in rows:
+        status = (row["status"] or "").lower()
+        if status == "done":
+            filed.append({"title": _triage_scrub(row["title"]),
+                          "section": "done"})
+            continue
+        if status not in KANBAN_ACTIVE:
+            continue  # archived / anything inert is not on the board's live lanes
+        kw = (row["block_kind"] or "").lower()
+        needs_joe = (status == "review") or \
+                    (status == "blocked" and kw in KANBAN_BLOCKED_JOE_KINDS)
+        item = {"title": _triage_scrub(row["title"]),
+                "section": status,
+                "needs": needs_joe,
+                "auto": _auto_backfill(row)}
+        active.append(item)
+        if needs_joe:
+            needs.append(item)
+    return {
+        "ok": True,
+        # header says "in the works (N)" — N = every active card on the board
+        "count": len(active),
+        "in_flight": active,
+        "needs_you": needs,
+        "recent_filed": filed[:3],
+        "empty_last_filed": filed[0]["title"] if filed else "",
+    }
 
 
 def rename_task(path, new_title):
@@ -511,7 +841,7 @@ def revert_done(path):
             "title": title}
 
 
-def resolve_decision(path, resolution="resolved", chosen=None):
+def resolve_decision(path, resolution="resolved", chosen=None, response=None):
     """Close a decision: decision:resolved + awaiting:none (via vaultlib).
 
     The CHOSEN option is NOT written to frontmatter `default` (not sanctioned
@@ -519,8 +849,18 @@ def resolve_decision(path, resolution="resolved", chosen=None):
     via the done plugin (sanctioned completion record + feeds the number-go-up
     counter), which is the contract's "resolving a decision immediately feeds
     the counter" reward-immediacy rule. Body is never edited.
+
+    PRD §3/§4 (grill-ratified, 2026-09-23):
+    - A specific option tap = chosen -> done-log clean token (feeds counter).
+    - "Other" free-type = response -> persisted ONLY as GL-002 `response:`
+      field (sanctioned additive) — never pollutes the done-log/counter line.
     """
     updates = {"decision": resolution, "awaiting": "none"}
+    if response and str(response).strip():
+        # Option A: Joe's review words live in `response:` (queryable, survives
+        # on the note). YAML-escaped safely on write by vaultlib. NEVER mixed
+        # into the done-log token below.
+        updates["response"] = str(response).strip()
     outcome = vaultlib.set_frontmatter(path, updates)
     logged_log = ""
     if resolution == "resolved" and chosen:
@@ -541,7 +881,8 @@ def resolve_decision(path, resolution="resolved", chosen=None):
         today_note = "00 Daily Scratchpad/%s.md" % date.today().isoformat()
         queue_vault_commit(today_note, "Cockpit: decision logged")
         queue_vault_commit("05 Assets/Data/done/completions.jsonl", "Cockpit: decision logged")
-    return {**outcome, "chosen": chosen or "", "logged": logged_log}
+    return {**outcome, "chosen": chosen or "", "response": (response or "").strip(),
+            "logged": logged_log}
 
 
 def mark_task_done(path):
@@ -961,6 +1302,11 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, schedule_plate())
         if path in ("/api/plate", "/api/plate/"):
             return _json(self, {"plate": vaultlib.get_plate()})
+        if path in ("/api/triage-flow", "/api/triage-flow/"):
+            return _json(self, get_triage_flow())
+        if path in ("/api/decide-item", "/api/decide-item/"):
+            q = urllib.parse.parse_qs(parsed.query)
+            return _json(self, get_decision_item(q.get("path", [""])[0]))
         if path.startswith("/api/") or path not in ("/", "/index.html", "/manifest.json", "/sw.js"):
             # static served for known assets; api 404 otherwise
             if path.startswith("/api/"):
@@ -1005,7 +1351,7 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, _plate_out)
             if parsed.path == "/api/resolve":
                 return _json(self, resolve_decision(data["path"], data.get("resolution", "resolved"),
-                                                    data.get("chosen")))
+                                                    data.get("chosen"), data.get("response")))
             if parsed.path == "/api/done":
                 return _json(self, mark_task_done(data["path"]))
             if parsed.path == "/api/book":

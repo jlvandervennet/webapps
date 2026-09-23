@@ -79,13 +79,35 @@ h1{font-size:1.55rem;letter-spacing:-.3px;font-weight:700;color:#f0f6fc;text-sha
   transition:all .1s ease}
 .cap-sel button.here{background:#21262d;color:#f0f6fc}
 .cap-sel button:active{transform:scale(.96)}
-/* Omega P1 lane selector (For Hermes / For Joe) — small sub-row under the capture bar */
-.lane-sel{display:flex;gap:6px;margin:6px 18px 0;justify-content:flex-end;flex-wrap:wrap}
-.lane-sel[hidden]{display:none}
-.lane-sel button{border:1px solid rgba(48,54,61,.6);background:rgba(33,38,45,.5);color:#8b949e;
-  font-family:inherit;font-size:.72rem;font-weight:600;min-height:30px;padding:0 12px;border-radius:9px;transition:all .1s ease}
-.lane-sel button.here{background:#21262d;border-color:rgba(88,166,255,.45);color:#58a6ff}
-.lane-sel button:active{transform:scale(.96)}
+/* ── Ωv17 "In the works" strip — LIVE MIRROR of the board's active lanes.
+   Each card labeled with its REAL kanban section (ready/running/review/blocked
+   …), folded directly under the capture bar (NO 4th panel). One glance, zero
+   interaction; the ONLY affordance opens Decide. ── */
+.triage{margin:6px 0 2px}
+.triage-inner{background:rgba(13,17,23,.55);border:1px solid rgba(48,54,61,.5);
+  border-radius:14px;padding:10px 14px}
+.triage-h{font-size:.66rem;text-transform:uppercase;letter-spacing:1.4px;color:#8b949e;
+  font-weight:700;display:flex;align-items:baseline;gap:5px}
+.triage-h .n{color:#58a6ff}
+.triage-line{display:flex;align-items:flex-start;gap:6px;font-size:.92rem;color:#e6edf3;
+  line-height:1.45;margin-top:6px;word-wrap:break-word;overflow-wrap:break-word;
+  word-break:break-word}
+.triage-line .dot{flex:0 0 auto;color:#58a6ff;font-weight:700}
+.triage-line .ti{flex:0 0 auto;color:#8b949e;font-size:.8rem;padding-top:2px;
+  text-transform:lowercase}
+.triage-line.glance .ti{color:#d29922;font-weight:700}   /* review/blocked-on-you */
+.triage-line.auto{opacity:.5}                            /* bot-automation backfill */
+.triage-empty{color:#8b949e;font-size:.86rem;line-height:1.5;margin-top:6px}
+.triage-empty em{color:#e6edf3;font-style:normal}
+.triage-filed{color:#8b949e;font-size:.8rem;margin-top:7px;line-height:1.4}
+.triage-filed .ck{color:#58a6ff}
+.triage-link{margin-top:8px}
+.triage-link button{background:rgba(88,166,255,.16);border:1px solid rgba(88,166,255,.4);
+  color:#58a6ff;border-radius:10px;min-height:42px;padding:0 12px;font-family:inherit;
+  font-size:.82rem;font-weight:650;transition:transform .1s ease}
+.triage-link button:active{transform:scale(.98)}
+.triage-loading{color:#8b949e;font-size:.86rem}
+.triage-err{color:#d29922;font-size:.86rem;display:flex;align-items:center;flex-wrap:wrap;gap:8px} 
 .dump-add{flex:0 0 auto;min-width:54px;min-height:52px;border-radius:16px;background:rgba(88,166,255,.22);
   color:#58a6ff;border:1px solid rgba(88,166,255,.45);font-size:1.25rem;font-weight:700}
 /* ── NAV (one-destination-at-a-time buttons, ≥50px) ── */
@@ -107,6 +129,8 @@ nav{margin-top:22px}
 #decideBody{text-align:left;max-width:60ch;margin:0 auto;line-height:1.5}
 #decideBody .item{text-align:left}
 #decideBody .state{text-align:left}
+#decideBody .decide-other-input{width:100%;background:#161b22;color:#f0f6fc;border:1px solid #30363d;border-radius:8px;padding:8px;line-height:1.4;resize:vertical}
+#decideBody .decide-full-item{color:#f0f6fc;background:#161b22;max-height:240px;overflow-y:auto;white-space:pre-wrap;line-height:1.4;font-size:.85rem}
 .loading{text-align:center}
 /* ── ROWS / one thing at a time, huge targets ── */
 .item{display:flex;align-items:flex-start;gap:14px;padding:1rem;min-height:64px;
@@ -303,19 +327,25 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
   <div class="glass">
     <div class="cap-sel" role="radiogroup" aria-label="Capture type">
       <button type="button" id="capModeTask" class="here" role="radio" aria-checked="true" data-capmode="task">Task</button>
-      <button type="button" id="capModeInbox" role="radio" aria-checked="false" data-capmode="inbox">Inbox</button>
+      <button type="button" id="capModeInbox" role="radio" aria-checked="false" data-capmode="inbox">Triage</button>
     </div>
     <input id="quickAdd" type="text" inputmode="text" autocomplete="off"
       autocorrect="off" autocapitalize="sentences" spellcheck="false"
       placeholder="Quick thought… type + Enter" aria-label="Quick add a thought">
     <button class="dump-add" id="quickAddBtn" aria-label="Add thought">+</button>
   </div>
-  <!-- Omega P1 lane selector: app-inbox captures route to the BOTS by default
-       (awaiting:hermes). JOE override surfaces it on his Waiting-on-You lane. -->
-  <div class="lane-sel" id="capLaneSel" hidden>
-    <button type="button" id="capLaneHermes" class="here" data-caplane="hermes">For Hermes</button>
-    <button type="button" id="capLaneJoe" data-caplane="joe">For Joe</button>
-  </div>
+</div>
+
+<!-- Omega Ωv17: "In the works" strip — LIVE MIRROR of the board's active
+     lanes, rendered as its OWN card directly under the capture bar so it
+     SCROLLS with the page (the quick-capture bar above stays sticky; this
+     list must NOT float/overlay the sections beneath it). Every card that
+     sits on a live board section (ready / running / review / blocked …)
+     shows with its REAL kanban section. One glance, zero interaction. The
+     ONLY affordance ("See what needs you") just opens the Decide panel;
+     every approval still happens there. Rendered by renderTriage(). -->
+<div class="triage" id="triageStrip" role="status" aria-live="polite">
+  <div class="triage-inner triage-loading">Checking the works…</div>
 </div>
 
 <nav>
@@ -358,7 +388,7 @@ input[type=date],input[type=text],input[type=time]{background:rgba(13,17,23,.6);
   </div>
 </div>
 
-<p class="footer">Joe's Cockpit · thin window over the vault · <span id="verTag" class="ver-tag">v14</span></p>
+<p class="footer">Joe's Cockpit · thin window over the vault · <span id="verTag" class="ver-tag">v19</span></p>
 
 <!-- ROUND-12 fix#2: Undo toast (fades after ~5s) -->
 <div id="undoToast" class="undo-toast" style="display:none" role="status" aria-live="polite">
@@ -563,10 +593,14 @@ function renderDecide(d){
       ? '<div class="state"><div class="big">You cleared the deck — nice.</div><div class="sub">Nothing needs your call right now. Here’s what’s coming up:</div></div>' + coming
       : emptyBlock('You cleared the deck — nice.','Nothing’s queued for a decision, and nothing’s coming up.');
   } else {
-    out = d.decisions.map(function(dc){
-      // ROUND-9: enforce left-align at the INJECTION POINT — the JS builder
-      // must set this inline so it persists across re-renders (CSS alone was
-      // overridden). padding:1rem, line-height:1.5, faint isolate background.
+    out = d.decisions.map(function(dc, dci){
+      // ROUND-9 + 🏛 Decide-overhaul: enforce left-align at the INJECTION POINT —
+      // the JS builder must set this inline so it persists across re-renders.
+      // PRD §2 context surface: ask (what's asked), why-now (verbatim lead),
+      // source+related + "see the full item" affordance, all plain-English.
+      var html = '';
+      // OPTIONS: tap a specific option = CONFIRM AS-IS (PRD §3.1) — no textarea
+      // on the common path. Wire the (previously dead) `choose` action.
       var optsHtml = (dc.options&&dc.options.length)
         ? dc.options.map(function(opt, i){
             var isLean = dc.has_lean && dc.lean && (opt===dc.lean || opt.indexOf(dc.lean)===0 || dc.lean.indexOf(opt)===0);
@@ -574,21 +608,65 @@ function renderDecide(d){
               'data-act="choose" data-path="'+esc(dc.path)+'" data-opt="'+esc(opt)+'" ' +
               'style="text-align:left;justify-content:flex-start;width:100%;line-height:1.5;padding:0.8rem 1rem;white-space:normal">' +
               (isLean?'✓ ':'')+'Option '+(i+1)+': '+esc(opt)+'</button>';
-          }).join('')
+          }).join('') + '<button class="btn btn-sm btn-bare" data-act="decide-other" ' +
+            'data-path="'+esc(dc.path)+'" data-idx="'+dci+'" ' +
+            'style="text-align:left;width:100%;margin-top:2px">Other — type my own</button>'
         : '<button class="btn btn-go btn-sm" data-act="accept" data-path="'+esc(dc.path)+'" ' +
           'style="text-align:left;justify-content:flex-start;width:100%">'+
           (dc.has_lean?'Go with “'+esc(dc.lean)+'”':'Decided — done')+'</button>';
+      var askLine = dc.ask ? '<div class="ctx" style="color:#8b949e;margin-top:2px;text-align:left">'+esc(dc.ask)+'</div>' : '';
+      var whyNowLine = dc.why_now ? '<div class="ctx" style="color:#8b949e;margin-top:1px;text-align:left"><span style="color:#6e7681">why now — </span>'+esc(dc.why_now)+'</div>' : '';
+      var sourceHtml = dc.source ? '<span style="color:#6e7681">from '+esc(dc.source)+'</span>' : '';
+      var relHtml = (dc.related&&dc.related.length)
+        ? ' · '+dc.related.map(function(r){ return '<span style="color:#6e7681">'+esc(r)+'</span>'; }).join(', ')
+        : '';
+      var seeFull = dc.can_view_full
+        ? '<button class="btn btn-sm btn-bare" data-act="decide-see" data-path="'+esc(dc.path)+'" ' +
+          'data-idx="'+dci+'" style="text-align:left;width:100%">see the full item &#8594;</button>'
+        : '';
+      var otherFold = '<div id="dother-'+dci+'" class="decide-other-fold" style="display:none;margin-top:6px">' +
+        '<textarea id="dother-in-'+dci+'" data-idx="'+dci+'" class="decide-other-input" ' +
+        'rows="3" placeholder="Type your answer or a note about the call…" aria-label="Your response"></textarea>' +
+        '<div style="display:flex;gap:8px;margin-top:4px">' +
+        '<button class="btn btn-go btn-sm" data-act="decide-other-save" data-path="'+esc(dc.path)+'" data-idx="'+dci+'">Confirm</button>' +
+        '<button class="btn btn-sm btn-bare" data-act="decide-other-cancel" data-idx="'+dci+'">Cancel</button>' +
+        '</div></div>';
       var dateLine = dc.decide_by ? '<div class="ctx">decide by '+esc(dc.decide_by)+'</div>' : '';
       var escapeLine = '<button class="btn btn-sm btn-bare" data-act="rebase" data-path="'+esc(dc.path)+'" style="text-align:left;width:100%">Not today — change the date</button>';
-      return '<div class="item decision" style="text-align:left;align-items:flex-start;padding:1rem;line-height:1.5;background:rgba(255,255,255,0.03)">' +
+      html += '<div class="item decision" style="text-align:left;align-items:flex-start;padding:1rem;line-height:1.5;background:rgba(255,255,255,0.03)">' +
         '<div class="body">' +
         '<div class="ctx" style="color:#d29922;margin-bottom:2px;text-align:left">your call:</div>' +
         '<div class="title" style="text-align:left">'+esc(dc.title)+'</div>' + dateLine +
+        askLine + whyNowLine +
+        '<div class="ctx" style="color:#6e7681;margin-top:2px;text-align:left">'+sourceHtml+relHtml+'</div>' +
         '<div class="slots" style="flex-direction:column;align-items:stretch;margin-top:10px;justify-content:flex-start">'+optsHtml+'</div>' +
+        otherFold +
+        seeFull +
+        '<div id="dfull-'+dci+'" data-idx="'+dci+'" style="display:none;margin-top:6px;border:1px solid #30363d;border-radius:8px;padding:10px" class="decide-full-item"></div>' +
         escapeLine + '</div></div>';
+      return html;
     }).join('');
   }
   document.getElementById('decideBody').innerHTML = out;
+}
+
+/* PRD §3/§4 — record a decision. chosen = specific option (done-log, counter);
+   response = "Other" free-type (persists as `response:` only, never done-log). */
+function decideResolve(path, chosen, response){
+  return api('/api/resolve',{method:'POST',body:{path:path, resolution:'resolved',
+    chosen:chosen||'', response:response||''}});
+}
+function decideShowOutcome(path, title){
+  // PRD §3.3 outcome surface: "✓ Decided — here's what that set in motion".
+  var t = document.getElementById('undoToast');
+  if (t){
+    t.querySelector('[data-act="undo"]').dataset.path = path||'';
+    t.querySelector('.undo-msg').textContent = '✓ Decided — we’ll file this to your library.';
+    t.style.display = 'flex';
+    if (_undoTimer) clearTimeout(_undoTimer);
+    _undoTimer = setTimeout(function(){ t.style.display = 'none'; }, 5000);
+  }
+  load('decide'); refreshCounter();
 }
 
 /* ── PLAN ── */
@@ -675,6 +753,57 @@ function renderPlanError(){
     stateBlock('Couldn’t sync your calendar','Check the connection and try again.', true);
 }
 
+/* ── Ωv17 "In the works" strip — LIVE MIRROR of the board's active lanes.
+   Renders /api/triage-flow: every active card from ANY assignee, labeled with
+   its REAL kanban section (the backend returns the section verbatim; no status
+   token / card id / path ever reaches here). review/blocked-on-you cards get
+   a `glance` (needs you) accent + drive the "See what needs you" affordance;
+   bot-automation backfill renders dimmed (`auto`), never hidden. ── */
+function triageWord(it){
+  var ck = (it.section === 'done') ? '&#10003;' : '•';
+  var cls = 'triage-line' + (it.auto ? ' auto' : '') + (it.needs ? ' glance' : '');
+  return '<div class="'+cls+'"><span class="dot">'+ck+'</span><span>'+esc(it.title)+'</span>'+
+    '<span class="ti">'+esc(it.section)+'</span></div>';
+}
+function renderTriage(d){
+  var el = document.getElementById('triageStrip');
+  if (!el) return;
+  if (!d || !d.ok){
+    el.innerHTML = '<div class="triage-inner triage-err">Couldn’t reach the works board.'+
+      '<button class="btn btn-sm btn-bare" style="min-height:40px" data-act="triage-retry">Retry</button></div>';
+    return;
+  }
+  var inflight = d.in_flight||[], needs = d.needs_you||[], filed = d.recent_filed||[];
+  if (!inflight.length){
+    // empty state: redirect to the ONE capture affordance, never a blank line
+    var h = 'in the works';
+    var empty = 'Nothing in the works right now — drop a thought in the box above and watch it move.';
+    if (d.empty_last_filed){
+      empty += '<div class="triage-filed">Last filed: <em>'+esc(d.empty_last_filed)+'</em> <span class="ck">&#10003;</span></div>';
+    }
+    el.innerHTML = '<div class="triage-inner"><div class="triage-h">'+h+'</div>'+
+      '<div class="triage-empty">'+empty+'</div></div>';
+    return;
+  }
+  // active: header count = every active card on the board, then each live line
+  var h = 'in the works <span class="n">('+d.count+')</span>';
+  var html = '<div class="triage-inner"><div class="triage-h">'+h+'</div>' +
+    inflight.map(triageWord).join('');
+  // the single affordance: only when something genuinely needs Joe
+  if (needs.length){
+    html += '<div class="triage-link"><button data-act="triage-see">See what needs you &#8594;</button></div>';
+  }
+  if (filed.length){
+    html += '<div class="triage-filed">Recently filed: ' +
+      filed.map(function(f){ return '<em>'+esc(f.title)+'</em> <span class="ck">&#10003;</span>'; }).join(' &nbsp;·&nbsp; ') +
+      '</div>';
+  }
+  el.innerHTML = html + '</div>';
+}
+function loadTriage(){
+  api('/api/triage-flow').then(renderTriage).catch(function(){ renderTriage({ok:false}); });
+}
+
 /* ── loads ── */
 /* ROUND-8: optimistic single-task toggle — flip the item locally, patch the
    cached list, re-render THAT lane cheaply, then sync the write in the
@@ -736,6 +865,9 @@ function load(area){
     api('/api/schedule').then(renderPlan).catch(renderPlanError);
   }
   api('/api/today').then(updateCounter).catch(function(){});
+  loadTriage();                     // Ωv17: refresh the "In the works" strip on
+                                    // the SAME cadence as the panels (boot, tab
+                                    // switch, and after any capture/action).
 }
 function renderPlate(){
   var el = document.getElementById('plateCount');
@@ -860,6 +992,14 @@ document.addEventListener('click', function(ev){
     commitAuth(ap ? ap.value : '');
     if (ap) ap.value = '';
     return;
+  } else if (act==='triage-see'){
+    // the strip's ONLY affordance: it never decides — it just opens the Decide
+    // panel, which is where every approval hold-point lives.
+    var dtab = document.querySelector('[data-tab="decide"]');
+    if (dtab) dtab.click(); else load('decide');
+    return;
+  } else if (act==='triage-retry'){
+    loadTriage(); return;
   }
   if (act==='pick'){
     if (plate_full()){ alert('Your plate is full — finish one of the 3 first.'); return; }
@@ -938,10 +1078,70 @@ document.addEventListener('click', function(ev){
       else if (r && r.not_done){ load('pick'); refreshCounter(); }
       else { alert((r&&r.output) || 'Couldn’t undo that.'); load('pick'); }
     }).catch(function(){ load('pick'); refreshCounter(); });   // ROUND-22
-  } else if (act==='accept'){
-    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); }).catch(function(){ load('decide'); refreshCounter(); });
-  } else if (act==='resolve'){
-    api('/api/resolve',{method:'POST',body:{path:path}}).then(function(){ load('decide'); refreshCounter(); }).catch(function(){ load('decide'); refreshCounter(); });
+  } else if (act==='accept' || act==='resolve'){
+    // no-options accept path: confirm the lean / default as-is, done.
+    api('/api/resolve',{method:'POST',body:{path:path, resolution:'resolved'}}).then(function(r){
+      if (r && r.ok){ decideShowOutcome(path); }
+      else { load('decide'); refreshCounter(); }
+    }).catch(function(){ load('decide'); refreshCounter(); });
+  } else if (act==='choose'){
+    // 🏛 Decide-overhaul PRD §3.1: tap a specific option = CONFIRM AS-IS, done.
+    // (This was a LATENT DEAD BUTTON — no handler existed — and `chosen` was
+    // never sent, so the pick was never recorded. Both fixed here.)
+    var opt = b.dataset.opt || '';
+    if (!opt){ return; }
+    decideResolve(path, opt, '').then(function(r){
+      if (r && r.ok){ decideShowOutcome(path); }
+      else { alert((r&&r.error) || 'Couldn’t save that.'); load('decide'); }
+    }).catch(function(){ load('decide'); refreshCounter(); });
+  } else if (act==='decide-other'){
+    // PRD §3.2: the ONLY path to a textarea — "Other" free-type escape.
+    var oi = b.dataset.idx;
+    var fold = document.getElementById('dother-'+oi);
+    if (fold){
+      fold.style.display = (fold.style.display === 'none') ? 'flex' : 'none';
+      var ta = document.getElementById('dother-in-'+oi);
+      if (ta && fold.style.display !== 'none') ta.focus();
+    }
+    return;
+  } else if (act==='decide-other-cancel'){
+    var oi2 = b.dataset.idx;
+    var fc = document.getElementById('dother-'+oi2);
+    if (fc){ fc.style.display = 'none'; var tac=document.getElementById('dother-in-'+oi2); if (tac) tac.value=''; }
+    return;
+  } else if (act==='decide-other-save'){
+    var oi3 = b.dataset.idx;
+    var ta3 = document.getElementById('dother-in-'+oi3);
+    var txt = (ta3 ? ta3.value : '').trim();
+    if (!txt){ alert('Type a response first.'); return; }
+    // PRD §4: "Other" free-type lands ONLY in `response:` — never the done-log.
+    decideResolve(path, '', txt).then(function(r){
+      if (r && r.ok){ decideShowOutcome(path); }
+      else { alert((r&&r.error) || 'Couldn’t save that.'); load('decide'); }
+    }).catch(function(){ load('decide'); refreshCounter(); });
+  } else if (act==='decide-see'){
+    // PRD §2/#5 + §5: open the FULL note body in-app via the read proxy.
+    var si = b.dataset.idx;
+    var box = document.getElementById('dfull-'+si);
+    if (!box) return;
+    if (box.style.display !== 'none'){ box.style.display = 'none'; b.textContent = 'see the full item →'; return; }
+    box.style.display = 'block';
+    box.innerHTML = '<div class="loading" style="padding:6px">Opening…</div>';
+    api('/api/decide-item?path='+encodeURIComponent(path)).then(function(r){
+      if (r && r.ok){
+        var bodyTxt = (r.body || 'Nothing to show.').trim();
+        box.innerHTML = '<div style="color:#8b949e;margin-bottom:4px;font-size:.8rem">the full item — '+
+          esc(r.title)+'</div><div style="color:#f0f6fc;white-space:pre-wrap">'+esc(bodyTxt)+'</div>';
+        b.textContent = 'hide the full item';
+      } else {
+        box.innerHTML = '<div style="color:#f0f6fc">'+(esc((r&&r.error)||'Couldn’t open that.'))+'</div>';
+        b.textContent = 'see the full item →';
+      }
+    }).catch(function(){
+      box.innerHTML = '<div style="color:#f0f6fc">Couldn’t open that right now.</div>';
+      b.textContent = 'see the full item →';
+    });
+    return;
   } else if (act==='retry'){
     load();
   } else if (act==='rebase'){
@@ -1124,7 +1324,11 @@ document.getElementById('quickAddBtn').addEventListener('click', submitQuick);
 /* Omega P1: TASK / INBOX capture selector — one-and-done, no picker/due/NLP.
    _capMode routes the quick-capture: task -> /api/add, inbox -> /api/add-capture. */
 var _capMode = 'task';
-var _capAwait = 'hermes';   // Omega P1 lane: default For Hermes (bots action it)
+/* Routing intent preserved: app-inbox captures funnel to the BOTS by default
+   (awaiting:hermes → a kanban triage card). The "For Hermes / For Joe" picker
+   was removed (Joe 2026-09-23 — fleet is a fixed specialist set) but this lane
+   plumbing + the awaiting:"joe" backend path are kept intact for any caller. */
+var _capAwait = 'hermes';   // default For Hermes (bots action it)
 function setCapMode(mode){
   _capMode = mode;
   var sel = document.querySelectorAll('.cap-sel button');
@@ -1133,28 +1337,14 @@ function setCapMode(mode){
     sel[i].classList.toggle('here', on);
     sel[i].setAttribute('aria-checked', on ? 'true' : 'false');
   }
-  var lane = document.getElementById('capLaneSel');
-  if (lane) lane.hidden = (mode !== 'inbox');   // lane picker only for Inbox captures
   var inp = document.getElementById('quickAdd');
   inp.placeholder = (mode === 'inbox')
     ? 'Drop a link / idea / note — team will file it…'
     : 'Quick thought… type + Enter';
   inp.focus();
 }
-function setCapLane(awaiting){
-  _capAwait = awaiting;
-  var b = document.querySelectorAll('#capLaneSel button');
-  for (var i=0;i<b.length;i++){
-    var on = b[i].dataset.caplane === awaiting;
-    b[i].classList.toggle('here', on);
-  }
-}
 document.querySelectorAll('.cap-sel button').forEach(function(b){
   b.addEventListener('click', function(){ zap(); setCapMode(b.dataset.capmode); });
-});
-var _laneSel = document.getElementById('capLaneSel');
-if (_laneSel) document.querySelectorAll('#capLaneSel button').forEach(function(b){
-  b.addEventListener('click', function(){ zap(); setCapLane(b.dataset.caplane); });
 });
 
 /* tabs */
@@ -1174,6 +1364,14 @@ document.querySelectorAll('[data-tab]').forEach(function(tab){
 /* service worker */
 if ('serviceWorker' in navigator){ navigator.serviceWorker.register('/sw.js'); }
 if (!AUTH) setAuth(); else load('pick');
+/* Ωv17: the strip mirrors the BOARD (any bot moving a card changes a section),
+   not just Joe's taps — quietly re-poll it so a section change (ready.run →
+   running → review) shows without Joe ever switching tabs. Cheap read-only GET;
+   never touches the active panel. Same live-update mechanism as panel reads. */
+var _triagePoll = setInterval(function(){
+  if (!document.getElementById('triageStrip')) return;
+  loadTriage();
+}, 30000);
 /* FRICTIONLESS: autofocus the dump input the instant the app loads */
 (function(){ var q=document.getElementById('quickAdd'); if(q){ q.focus(); } })();
 /* ROUND-11 fix#2: reset Done-Today to a clean 0 the moment the app loads on a

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -55,8 +56,12 @@ print("=" * 62)
 
 # --- boot the API on a test port pointing at the temp vault ---
 port = 8799
+kanban_tmp = os.path.join(tmp, "test-kanban.db")
 env = {**os.environ, "VAULT_ROOT": tmp, "COCKPIT_HOST": "127.0.0.1",
-       "COCKPIT_PORT": str(port), "COCKPIT_PASSWORD": "testpw"}
+       "COCKPIT_PORT": str(port), "COCKPIT_PASSWORD": "testpw",
+       # Ω v15: repoint the kanban subprocess at a throwaway engine DB so a
+       # hermes-lane capture test never touches the live fleet board.
+       "KANBAN_DB": kanban_tmp, "HERMES_HOME": "/opt/data"}
 proc = subprocess.Popen(
     ["/opt/hermes/.venv/bin/python", "/opt/data/vault-mcp/cockpit_api.py"],
     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -169,6 +174,65 @@ try:
           else "\n[FAIL] resolve-chosen: fm=%r logged=%r rr=%r" % (fm, logged_pick, rr))
 except Exception as e:
     print("\n[FAIL] decide round-5: %s: %s" % (type(e).__name__, e))
+
+# ═══ 🏛 DECIDE-OVERHAUL (PRD t_ca2c7e4d, ratif. 2026-09-23) ═══
+# context surface + edit-response: option-tap=confirm-as-is, "Other"=response:
+#  fixture = a decision with BLUF lead, why-now section, source + related.
+try:
+    (Path(tmp) / "01 Inbox" / "oh-decision.md").write_text(
+        "---\ntype: inbox\ntitle: approve the fueling plan\nowner: athena\nsource: \"[[Marathon Roadmap]]\"\nrelated: [Marathon Roadmap]\nawaiting: joe\ndecision: open\ndue: \"2026-09-30\"\n---\n\n# The fork (why it matters now)\nThe marathon is six weeks out so the fueling plan has to be settled before the long run.\n\n**Recommendation: approve the fueling plan as drafted.**\n\n1. (Lean) Approve as-is, one week of trial\n2. Adjust the calorie targets first\n3. Hold for more data\n\n**Default if no choice by 2026-09-30:** option 1\n", encoding="utf-8")
+    s, d = get("/api/decide")
+    oh = next((x for x in d["decisions"] if x["path"].endswith("oh-decision.md")), None)
+    okc = (oh is not None
+           and oh.get("ask") and "fueling plan" in oh["ask"]
+           and oh.get("why_now") and "six weeks out" in oh["why_now"]
+           and oh.get("source") == "Marathon Roadmap"
+           and len(oh.get("related", [])) >= 1
+           and oh.get("can_view_full") is True
+           and oh.get("options") and len(oh["options"]) == 3)
+    print("\n[PASS] /api/decide context surface (ask+why_now+source+related+full)" if okc
+          else "\n[FAIL] decide context surface: %r" % (oh or {}))
+    # full-item read proxy: returns the body, no raw path token semantics leak
+    s, fi = get("/api/decide-item?path=" + urllib.parse.quote(oh["path"]))
+    okfull = fi.get("ok") is True and "fueling plan has to be settled" in fi.get("body", "") and fi.get("title")
+    print("\n[PASS] /api/decide-item full-item open (body proxied, ok=%s)" % fi.get("ok") if okfull
+          else "\n[FAIL] decide-item: %r" % fi)
+    # OTHER free-type -> response: (Option A), YAML-safe multi-line, NEVER done-log,
+    # NEVER pollutes counter. chosen absent so no done-log token.
+    long_resp = "Approve it but re-check carbs after week one.\nAlso note: plan should be revisited at taper.\nQuote \"the gut\" handling."
+    s, rr = post("/api/resolve", {"path": oh["path"], "response": long_resp})
+    fm,_ = vaultlib.split_frontmatter((Path(tmp) / "01 Inbox" / "oh-decision.md").read_text())
+    resp = fm.get("response", "")
+    lx = Path(tmp) / "05 Assets" / "Data" / "done" / "completions.jsonl"
+    logs2 = ""
+    if lx.is_file():
+        import json as _j2
+        logs2 = "\n".join(_j2.loads(l)["task"] for l in lx.read_text().splitlines() if l.strip())
+    okr2 = (rr.get("ok") is True
+            and fm.get("decision") == "resolved"
+            and "carbs after week one" in resp          # multi-line survives
+            and "quot" in resp or "\"the gut\"" in resp # quotes survived
+            and "fueling plan" not in logs2             # response NOT in done-log
+            and "Approve it" not in logs2)
+    print("\n[PASS] Other free-type persisted as response: (YAML-safe, not done-log)" if okr2
+          else "\n[FAIL] other-response: resp=%r logged=%r rr=%r" % (resp, logs2, rr))
+    # re-open: a NEW open decision whose option-tap (choose) -> chosen -> done-log
+    (Path(tmp) / "01 Inbox" / "oh2.md").write_text(
+        "---\ntype: inbox\ntitle: pick the venue\nowner: athena\nawaiting: joe\ndecision: open\ndue: \"2026-10-01\"\n---\n\n# The fork (why it matters now)\nVenue holds 200 and the date is pinned.\n\n1. Blue Room\n2. (Lean) Garden Hall\n3. Rooftop\n\n**Default if no choice by 2026-10-01:** option 2\n", encoding="utf-8")
+    s, d2 = get("/api/decide")
+    oh2 = next((x for x in d2["decisions"] if x["path"].endswith("oh2.md")), None)
+    s, rr2 = post("/api/resolve", {"path": oh2["path"], "chosen": "Garden Hall"})
+    logs3 = ""
+    lx3 = Path(tmp) / "05 Assets" / "Data" / "done" / "completions.jsonl"
+    if lx3.is_file():
+        import json as _j3
+        logs3 = "\n".join(_j3.loads(l)["task"] for l in lx3.read_text().splitlines() if l.strip())
+    okr3 = rr2.get("logged") == "done-logged" and "Garden Hall" in logs3 and rr2.get("chosen") == "Garden Hall"
+    print("\n[PASS] option-tap confirm records chosen in done-log (counter feed)" if okr3
+          else "\n[FAIL] option-tap: rr=%r logged=%r" % (rr2, logs3))
+except Exception as e:
+    print("\n[FAIL] decide-overhaul: %s: %s" % (type(e).__name__, e))
+
 
 # 2b2) coming-up preview endpoint present + structured
 try:
@@ -334,32 +398,46 @@ try:
 except Exception as e:
     print("\n[FAIL] quick-add round-trip: %s: %s" % (type(e).__name__, e))
 
-# 3f) OMEGA P1/CORRECTION (2026-09-15 Joe ruling): INBOX capture — POST
-#     /api/add-capture writes a real 01 Inbox note for the BOTS to action.
-#     Routing lane DEFAULT = awaiting:hermes (Hermes processes + delegates, NEVER
-#     in Joe's Waiting-on-You lane), decision:open / status:open. Original-Text
-#     intact. Low-cost selector: awaiting:hermes (default) / awaiting:joe (override).
+# 3f) OMEGA P1 / Ω v15 (2026-09-22 Joe ruling): INBOX capture — POST
+#     /api/add-capture now creates a KANBAN TRIAGE card assigned to hermes on
+#     the work board (Hermes the orchestrator decomposes/scopes/assigns/routes),
+#     NOT a vault inbox note. Routing lane: awaiting:hermes (default) -> triage
+#     card; awaiting:joe (approval lane, unchanged) -> real 01 Inbox note.
+#     Original-Text intact (raw capture rides unedited as title + body + a
+#     "source: omega-capture" tag). No belt-and-suspenders inbox note on the
+#     hermes lane. KANBAN_DB is pinned to a throwaway file so the test never
+#     touches the live fleet board.
 try:
     orig = "Omega inbox capture test idea"
+    inbox_dir = Path(tmp) / "01 Inbox"
+    inbox_before = len(list(inbox_dir.rglob("*.md"))) if inbox_dir.exists() else 0
     s, d = post("/api/add-capture", {"text": orig})
-    ok_path = d.get("ok") is True and d.get("path", "").startswith("01 Inbox/")
-    new_p = Path(tmp) / d["path"]
-    txt = new_p.read_text(encoding="utf-8") if new_p.exists() else ""
-    fm_in, _ = vaultlib.split_frontmatter(txt)
-    # Original-Text intact: title + H1 + - [ ] checkbox carry the raw text, body un-mutated
-    ot = (fm_in.get("title") == orig) and ("# %s" % orig in txt) and ("- [ ] %s" % orig in txt)
-    ok_fm = fm_in.get("type") == "inbox" and fm_in.get("status") == "open" \
-        and fm_in.get("awaiting") == "hermes" and fm_in.get("decision") == "open" and ot
-    # no-token payload: the POST response leaks no internal dev tokens
-    # (audit the payload minus the machine-only `path` write handle)
-    d_nop = {k: v for k, v in d.items() if k != "path"}
-    leak = [t for t in ["sched.py", "vaultlib", "WRITABLE_KEYS", ".md", "status:", "awaiting:"] if t in str(d_nop)]
-    # awaiting:hermes must NOT surface as an awaiting-Joe decision row (not Joe's lane)
-    s2, d2 = get("/api/decide")
-    in_decide = any(x.get("path") == d["path"] for x in d2["decisions"])
-    prints = (ok_path, ok_fm, not leak, not in_decide)
-
-    # JOE override via the selector: awaiting:joe -> surfaces on the Decide lane
+    ok_card = d.get("ok") is True and bool(d.get("card_id")) and d.get("source") == "omega-capture"
+    # no inbox note written on the hermes lane (no belt-and-suspenders): the
+    # capture must NOT add a new 01 Inbox note (fixtures seed the dir upfront).
+    inbox_after = len(list(inbox_dir.rglob("*.md"))) if inbox_dir.exists() else 0
+    ok_no_inbox = (inbox_after - inbox_before) == 0
+    # Original-Text intact: the STORED card body carries the raw text + tag.
+    # Read it back from the throwaway engine DB (the isolated subprocess wrote
+    # there via KANBAN_DB set in the boot env).
+    ok_ot = False
+    body_txt = ""
+    try:
+        import sqlite3 as _sq
+        _con = _sq.connect(kanban_tmp)
+        row = _con.execute("SELECT title, body FROM tasks WHERE id=?",
+                           (d.get("card_id"),)).fetchone()
+        _con.close()
+        if row:
+            title_t, body_txt = (row[0] or ""), (row[1] or "")
+            ok_ot = (body_txt.startswith(orig) and "source: omega-capture" in body_txt
+                     and (title_t == orig[:120]))
+    except Exception:
+        ok_ot = False
+    prints = (ok_card, ok_no_inbox, ok_ot, not any(t in str({k: v for k, v in d.items() if k != "path"})
+                   for t in ["sched.py", "WRITABLE_KEYS", "status:", "awaiting:"]))
+    # JOE override via the selector: awaiting:joe -> approval lane UNCHANGED
+    # (a real 01 Inbox note awaiting joe), surfaced on the Decide lane.
     s3, d3 = post("/api/add-capture", {"text": "Omega joe-lane capture test", "awaiting": "joe"})
     ok_override = d3.get("ok") is True and d3.get("path", "").startswith("01 Inbox/")
     pj = Path(tmp) / d3["path"]
@@ -371,11 +449,17 @@ try:
     prints2 = (ok_override, joe_lane, joe_in_decide)
 
     ok = all(prints) and all(prints2)
-    print("\n[PASS] inbox-capture awaiting:hermes default + OT intact + no-token + NOT in Joe lane "
-          "(path=%s, acpts=%s) + JOE override=%s" %
-          (d.get("path"), prints, prints2) if ok
-          else "\n[FAIL] inbox-capture: acpts=%s joe-override=%s d=%r d3=%r fm_in=%r fmj=%r" %
-          (prints, prints2, d, d3, fm_in, fmj))
+    print("\n[PASS] Ωv15 inbox-capture -> kanban triage card (hermes) + OT intact + "
+          "no inbox note + joe approval lane unchanged "
+          "(card=%s, acpts=%s) + JOE override=%s" %
+          (d.get("card_id"), prints, prints2) if ok
+          else "\n[FAIL] inbox-capture v15: acpts=%s joe-override=%s d=%r d3=%r fmj=%r" %
+          (prints, prints2, d, d3, fmj))
+    try:
+        if kanban_tmp and os.path.exists(kanban_tmp):
+            os.remove(kanban_tmp)
+    except OSError:
+        pass
 except Exception as e:
     print("\n[FAIL] inbox-capture round-trip: %s: %s" % (type(e).__name__, e))
 
@@ -484,6 +568,79 @@ try:
     print("\n[PASS] resolve left body intact (Original-Text safe)" if ok else "\n[FAIL] body mutated")
 except Exception as e:
     print("\n[FAIL] body-check: %s: %s" % (type(e).__name__, e))
+
+# 4b) Ωv17 "IN THE WORKS" STRIP flow — GET /api/triage-flow now mirrors EVERY
+#   active card on the work board (ANY assignee) in an active section, labels
+#   each with its REAL kanban section (triage/todo/ready/running/review/blocked),
+#   flags needs-you (review / blocked-needs_input) separately, keeps done →
+#   recently filed, dims bot-automation backfill (kept visible), and NEVER leaks
+#   a card id / path / seam. Pure read (auth-free). Re-seed the server's
+#   kanban_tmp with our throwaway cards.
+#   NOTE: the test table now carries a `body` column (get_triage_flow SELECTs
+#   it for the automation scan) plus an apollo + a nightly-sweep card to prove
+#   the mirror includes non-hermes lanes and the noise guard.
+try:
+    import sqlite3 as _sq3
+    _con = _sq3.connect(kanban_tmp)
+    _con.execute("CREATE TABLE tasks (id TEXT PRIMARY KEY,title TEXT,body TEXT,assignee TEXT,status TEXT,tenant TEXT,created_at INT,block_kind TEXT)")
+    _seed = [
+        ("t10", "fresh capture idea",  None, "hermes",    "triage",   "work", 1, None),
+        ("t11", "building it",         None, "hermes",    "running",  "work", 2, None),
+        ("t12", "t_12 .md source: x",  None, "hermes",    "running",  "work", 3, None),
+        ("t13", "marathon fueling",    None, "hermes",    "review",   "work", 4, None),
+        ("t14", "blocked on you",      None, "hermes",    "blocked",  "work", 5, "needs_input"),
+        ("t15", "dependency noise",    None, "hermes",    "blocked",  "work", 6, "dependency"),
+        ("t16", "vesta filing",        None, "vesta",     "running",  "work", 7, None),
+        ("t17", "filed to library",    None, "hermes",    "done",     "work", 8, None),
+        ("t18", "apollo chore",        None, "apollo",    "running",  "work", 9, None),
+        ("t19", "nightly zone sweep",  None, "hephaestus","running",  "work", 10, None),
+    ]
+    _con.executemany("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?)", _seed)
+    _con.commit(); _con.close()
+    _s, _d = get("/api/triage-flow")
+    ok_t = _d.get("ok") is True
+    _in = _d.get("in_flight") or []
+    _needs = _d.get("needs_you") or []
+    _f = _d.get("recent_filed") or []
+    def _has(_arr, _s_):
+        return any(_s_ in x["title"] for x in _arr)
+    # needs-you = review + blocked-needs_input, NOT dependency/transient
+    ok_needs = (_has(_needs, "marathon fueling") and _has(_needs, "blocked on you")
+                and not _has(_needs, "dependency noise"))
+    # live mirror = ANY assignee in an active section (apollo + vesta + heph)
+    ok_mirror = (_has(_in, "apollo chore") and _has(_in, "vesta filing")
+                 and _has(_in, "building it") and _has(_in, "fresh capture idea"))
+    # real section tag surfaced per item (board section verbatim, not a life-word)
+    _secs = {x["title"]: x.get("section") for x in _in}
+    ok_sections = (_secs.get("building it") == "running" and
+                   _secs.get("fresh capture idea") == "triage" and
+                   _secs.get("marathon fueling") == "review" and
+                   _secs.get("nightly zone sweep") == "running")
+    # automation backfill is kept visible but dim (auto flag), never hidden
+    _auto_titles = [x["title"] for x in _in if x.get("auto")]
+    ok_auto = ("nightly zone sweep" in _auto_titles) and \
+              all(t not in _auto_titles for t in ("building it", "fresh capture idea"))
+    ok_filed = _has(_f, "filed to library")
+    ok_count = _d.get("count") == 9          # 9 active cards (done t17 excluded)
+    # no-crud audit across every rendered value (titles scrubbed)
+    _blob = " ".join(str(x) for _b_ in ("in_flight", "needs_you", "recent_filed")
+                     for x in _d.get(_b_, []))
+    _blob += " " + str(_d.get("empty_last_filed"))
+    ok_nocrud = all(tok not in _blob for tok in
+                    ("t_", "/opt/", ".md", "status:", "awaiting:", "source:", "tenant:", "sched.py"))
+    ok = ok_t and ok_needs and ok_mirror and ok_sections and ok_auto and ok_filed and ok_count and ok_nocrud and (_s == 200)
+    print("\n[PASS] Ωv17 triage-flow board-mirror + sections + no-crud (count=%s, in=%d, needs=%d, filed=%d)"
+          % (_d.get("count"), len(_in), len(_needs), len(_f))
+          if ok else
+          "\n[FAIL] triage-flow: ok=%s needs=%s mirror=%s sections=%s auto=%s filed=%s count=%s nocrud=%s d=%r"
+          % (ok_t, ok_needs, ok_mirror, ok_sections, ok_auto, ok_filed, ok_count, ok_nocrud, _d))
+    try:
+        if kanban_tmp and os.path.exists(kanban_tmp):
+            os.remove(kanban_tmp)
+    except OSError:
+        pass
+except Exception as e:
+    print("\n[FAIL] triage-flow: %s: %s" % (type(e).__name__, e))
 
 # 5) unauthenticated write refused
 try:

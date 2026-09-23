@@ -161,7 +161,43 @@ def _parse_scalar(val: str):
         return None
     if re.fullmatch(r"-?\d+", val):
         return int(val)
+    if val.startswith('"') and val.endswith('"'):
+        return _yaml_dq_unescape(val[1:-1])
+    if val.startswith("'") and val.endswith("'"):
+        return val[1:-1]
     return val.strip('"').strip("'")
+
+
+def _yaml_dq_unescape(s):
+    """Undo _yaml_dq_escape exactly, left-to-right (order-independent).
+
+    Mirror of the escaper: `\\\\`->`\\`, `\\"`->`"`, `\\n`/`\\t`/`\\r` -> the
+    control chars, `\\uXXXX` -> the codepoint. A literal backslash stays a
+    backslash; a real newline user typed is preserved as `\\n` on write and
+    comes back as a real newline here.
+    """
+    out = []
+    i = 0
+    n = len(s)
+    esc = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}
+    while i < n:
+        ch = s[i]
+        if ch == "\\" and i + 1 < n:
+            nxt = s[i + 1]
+            if nxt == "u" and i + 5 < n:
+                try:
+                    out.append(chr(int(s[i + 2:i + 6], 16)))
+                    i += 6
+                    continue
+                except ValueError:
+                    pass
+            if nxt in esc:
+                out.append(esc[nxt])
+                i += 2
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 # ── Frontmatter-safe write ─────────────────────────────────────────────────
@@ -173,6 +209,10 @@ WRITABLE_KEYS = {
     "status", "assignee", "due", "related",
     # inbox decision lifecycle (awaiting: joe)
     "awaiting", "decision",
+    # decision edit-response (GL-002 sanctioned additive, grill 2026-09-23:
+    # Joe's review words / "Other" free-type live here; chosen option lives in
+    # the done-log — they must never mix)
+    "response",
     # Two-Roots levers (sanctioned additive — see GL-002 §sanctioned additive)
     "do-by", "default",
     # progress / goal additive
@@ -239,7 +279,37 @@ def _format_fm_value(k, v):
     s = str(v)
     if _is_plain_scalar(s):
         return "%s: %s" % (k, s)
-    return '%s: "%s"' % (k, s)
+    # YAML double-quoted scalar with full escaping — a multi-line decision
+    # `response:` (line breaks, quotes, colons) must never break the block.
+    return '%s: "%s"' % (k, _yaml_dq_escape(s))
+
+
+def _yaml_dq_escape(s):
+    """Escape a string for a YAML double-quoted scalar (round-trips safely).
+
+    Escapes backslash, double-quote, line breaks, tabs and other C0 controls.
+    Newlines become literal `\\n` so the flat _parse_yamlish reader keeps a
+    single logical value (it reads line-by-line); a real YAML parser (Vesta /
+    Obsidian / Dataview) un-escapes `\\n` back to a real newline.
+    """
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif ch == "\r":
+            out.append("\\r")
+        elif o < 0x20:
+            out.append("\\u%04x" % o)
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _is_plain_scalar(s):
@@ -285,8 +355,28 @@ def get_plate() -> list:
 
 
 def set_plate(paths: list) -> dict:
-    """Write the active plate (max 3). Vault-canonical via a cockpit planner note."""
-    paths = [str(x) for x in paths[:3]]
+    """Write the active plate (max 3). Vault-canonical via a cockpit planner note.
+
+    Paths are normalized to vault-relative BEFORE persisting (round-22 /
+    Omega stale-auth hardening): an absolute path in the plate made
+    read_note/_resolve_vault_path silently resolve outside the vault, so the
+    scheduler dropped it and returned `items:[]` (read-side tolerant, schedule
+    just skipped). Normalizing at this single write point guarantees the
+    stored plate is always relative regardless of caller.
+    """
+    norm = []
+    for x in paths[:3]:
+        s = str(x).strip()
+        if not s:
+            continue
+        p = Path(s)
+        if p.is_absolute():
+            try:
+                s = str(p.relative_to(VAULT_ROOT))
+            except ValueError:
+                continue          # absolute path outside the vault — drop it
+        norm.append(s)
+    paths = norm
     p = VAULT_ROOT / (PLATE_NOTE + ".md")
     p.parent.mkdir(parents=True, exist_ok=True)
     body = "# Active Plate\n\nThe 3 tasks Joe has on the plate right now.\n"
