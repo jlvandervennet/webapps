@@ -233,6 +233,26 @@ try:
 except Exception as e:
     print("\n[FAIL] decide-overhaul: %s: %s" % (type(e).__name__, e))
 
+# 2b-BODY) t_b643f822: context surface renders the note BODY — H1 title +
+# top BLUF lead + hold-point or clean-fallback — never the filename /
+# frontmatter state string / wrong body section / raw markdown markers.
+try:
+    (Path(tmp) / "01 Inbox" / "Decision - Review the Oura sync (awaiting Joe).md").write_text(
+        "---\ntype: inbox\nstatus: open\nawaiting: joe\ndecision: open\nprocessed: false\nsource: kanban-card t_000000\n---\n\n# Review the Oura nightly pull (approve build?)\n\n**From:** Hephaestus, via card `t_000000`\n**Decision needed:** green-light the Oura nightly pull so it can ship.\n\n## What it does\nAutomates the `/oura` sync so **you never have to run it by hand**.\n\n**Known gap (Heph disclosed):** the default-profile orchestrator cards aren't covered yet — can loosen later.\n\n## Your options\n1. **Approve** — ship it.\n2. **Hold** — tell Heph why.\n", encoding="utf-8")
+    s, d = get("/api/decide")
+    bh = next((x for x in d["decisions"] if x["path"].endswith("Decision - Review the Oura sync (awaiting Joe).md")), None)
+    raw_leak = any(mk in (bh.get("title") or "") + (bh.get("ask") or "") + (bh.get("why_now") or "")
+                   for mk in ("**", "`", "(awaiting Joe)", "status:"))
+    okbody = (bh is not None
+              and bh.get("title") == "Review the Oura nightly pull (approve build?)"  # body H1, not filename
+              and bh.get("ask") == "Decision needed: green-light the Oura nightly pull so it can ship."
+              and bh.get("why_now") == ""                                             # no hold-point -> clean ""
+              and not raw_leak)                                                       # no raw md/frontmatter
+    print("\n[PASS] /api/decide renders note BODY (H1 title + BLUF lead, no filename/md/state leak)"
+          if okbody else "\n[FAIL] decide body-render: %r" % (bh or d))
+except Exception as e:
+    print("\n[FAIL] decide body-render: %s: %s" % (type(e).__name__, e))
+
 
 # 2b2) coming-up preview endpoint present + structured
 try:

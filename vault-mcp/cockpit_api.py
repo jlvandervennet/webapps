@@ -299,6 +299,7 @@ def get_decide():
         # any explicit frontmatter options.
         options = []
         lean = (d.get("default") or "").strip()
+        title = (d.get("title") or "").strip()   # last-resort stem (fm title or filename)
         ctx = {}
         try:
             note = vaultlib.read_note(d["path"])
@@ -311,13 +312,16 @@ def get_decide():
                 options = [str(o).strip() for o in fm["options"] if str(o).strip()]
             if not lean and parsed_lean:
                 lean = parsed_lean
-            # PRD §2 "context surface": what's being asked (BLUF lead), why-now
-            # (leading sentence VERBATIM, no LLM), source + related, all proxied.
+            # t_b643f822: title = the note's BODY H1 (clean, no filename/frontmatter
+            # state strings like "(awaiting Joe)"). Then PRD §2 "context surface":
+            # what's being asked (BLUF lead), why-now (hold-point VERBATIM, no LLM),
+            # source + related, all proxied plain-English.
+            title = _decision_title(fm, body, title)
             ctx = _extract_decision_context(fm, body)
         except Exception:
             options = []
         rows.append({
-            "title": (d.get("title") or "").strip(),
+            "title": title,
             "decide_by": _plain_date(d.get("do_by")),
             "decide_by_raw": d.get("do_by") or "",
             "lean": lean,
@@ -380,58 +384,137 @@ def _extract_decision_context(fm, body):
 
 
 def _bluf_lead(body):
-    """First meaningful prose line = the recommendation/BLUF lead, truncated.
+    """Top-of-body BLUF lead = the 'what's being asked' line, VERBATIM (a
+    plain-text cut, no LLM, never synthesized).
 
-    Prefers a bolded recommendation/BLUF line (e.g. `**Recommendation: ...**`),
-    falling back to the first non-furniture prose line. Raw text only.
+    Reads ONLY the intro region above the first section heading, so it can
+    never jump to a body section below (the old keyword-grep bug grabbed a
+    far-down bold line like 'Known gap … default-profile …'). Prefers an
+    ask-labelled bold intro line (`**Decision needed:**` / `**Ask:**` …), else
+    the first prose line of the intro. Grill ruling 5: verbatim only, no LLM.
     """
     lines = (body or "").splitlines()
-    fallback = ""
-    for line in lines:
+    i = 0
+    # skip blank lines + the leading H1 (that's the title, not the lead)
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and re.match(r"^#\s", lines[i].strip()):
+        i += 1
+    first_prose = ""
+    for line in lines[i:]:
         s = line.strip()
-        if not s or s.startswith(("#", ">", "|", "```", "[^", "<!--")):
+        if not s:
             continue
-        if s.startswith("- ") or s.startswith("* "):
+        if re.match(r"^#{1,6}\s", s):            # a section heading ends the intro
+            break
+        if s.startswith((">", "|", "```", "---", "<!--")):
             continue
-        if s.startswith("**") and ("recommend" in s.lower() or "bluf" in s.lower() or "default" in s.lower()):
-            return _cut_line(s.strip("*").strip(), 160)
-        if not fallback:
-            fallback = _cut_line(s, 160)
-    return fallback
+        if re.match(r"^\s*[-*+]\s", s) or re.match(r"^\s*\d+[.)]\s", s):
+            continue                              # list item
+        label = _bold_label(s)
+        if label and any(w in label.lower() for w in _ASK_LABELS):
+            return _cut_line(_strip_md(s), 160)
+        if not first_prose:
+            first_prose = _cut_line(_strip_md(s), 160)
+    return first_prose
 
 
 def _leading_sentence(body):
-    """First sentence of the body, VERBATIM (plain-text cut, no synthesis).
+    """The why-it-matters-now / hold-point reason, VERBATIM (plain-text cut,
+    no LLM, never synthesized).
 
-    Prefers the note's "why it matters now" / "the fork" / hold-point reason
-    section (heading containing why|fork|hold|matter) — those words literally
-    say why the fork exists this moment. Falls back to the note's first
-    substantive prose line. Always the RAW leading substring, never rewording,
-    truncated to ~1-2 lines. Grill ruling 5: verbatim only, NO LLM.
+    Fires only when the note SAYS a hold-point: either a section heading that
+    reads like a why/fork/hold/matter reason (take the first prose line beneath
+    it), or a bold inline leader like `**Why now:** …` / `**Why it matters:**`.
+    If there is NO explicit hold-point, fall back CLEANLY to "" — never grab a
+    different body section (the old fallback pulled the '## What it does' line).
     """
     lines = (body or "").splitlines()
-    prefs = []
-    fallback = ""
     for i, line in enumerate(lines):
         s = line.strip()
         if not s:
             continue
-        if s.startswith(("#", ">", "-", "*", "|", "```", "!")):
+        # inline bold hold-point leader: **Why now:** / **Hold point:** / **Why it matters:**
+        m = re.match(r"^\*\*([^*]+?):\*\*\s*(.*)$", s)
+        if m:
+            if _is_hold_label(m.group(1)):
+                rest = (m.group(2) or "").strip()
+                if rest:
+                    return _cut_line(_strip_md(rest), 160)
             continue
-        if s.startswith("**") and s.rstrip().endswith("**"):
-            continue  # bold leader, not the reason sentence
-        if s.startswith("**"):
+        # a section heading directly above announces the why-now section
+        if i > 0 and re.match(r"^#", lines[i - 1].strip()):
+            head = lines[i - 1].strip().lstrip("#").strip().lower()
+            if _is_hold_label(head):
+                return _cut_line(_strip_md(s), 160)
+    return ""
+
+
+_ASK_LABELS = ("decision needed", "decision requested", "decision required",
+               "ask", "recommend", "bluf", "question", "need your", "your call")
+_HOLD_LABELS = ("why", "fork", "hold", "matter", "stakes")
+
+
+def _decision_title(fm, body, file_stem):
+    """Title = the note's BODY H1, clean (no filename / frontmatter state
+    strings like '(awaiting Joe)' or 'status:'). Falls back to frontmatter
+    `title`, then the first body line, then a filename stem with any trailing
+    operating parenthetical stripped. Never shows raw operating artifacts.
+    """
+    for line in (body or "").splitlines():
+        s = line.strip()
+        if not s:
             continue
-        if not fallback:
-            fallback = _cut_line(s, 160)
-        # a heading right above announces the why-now section
-        if i > 0 and lines[i - 1].strip().startswith("#"):
-            head = lines[i - 1].strip().lstrip("#").lower()
-            if any(w in head for w in ("why", "fork", "hold", "matter", "reason")):
-                prefs.append(_cut_line(s, 160))
-    if prefs:
-        return prefs[0]
-    return fallback
+        m = re.match(r"^#\s+(.+)$", s)
+        if m:
+            t = _strip_md(m.group(1)).strip()
+            if t:
+                return t
+        break
+    t = str(fm.get("title") or file_stem or "").strip()
+    if not t:
+        return t
+    # last resort: a filename-derived stem may carry an operating suffix like
+    # '(awaiting Joe)' — strip a trailing parenthetical before showing it.
+    return re.sub(r"\s*\([^)]*\)\s*$", "", t).strip() or t
+
+
+def _bold_label(s):
+    """Label ('tag') of a bold-led paragraph, supporting both `**Tag:** rest`
+    and `**Tag: rest**` forms → 'Tag'. Returns '' when the line isn't bold-led.
+    """
+    if not s.startswith("**"):
+        return ""
+    m = re.match(r"^\*\*([^*]+?)\*\*", s)   # the leading bold span's inner text
+    inner = (m.group(1) if m else "").strip()
+    if not inner:
+        return ""
+    return inner.split(":", 1)[0].strip()
+
+
+def _is_hold_label(label):
+    l = (label or "").lower()
+    return any(w in l for w in _HOLD_LABELS)
+
+
+def _strip_md(s):
+    """Strip markdown markers from a display line but KEEP the words.
+
+    Removes bold/emphasis/code/heading/list/blockquote markers without touching
+    bracketed groups (bracket-tag-safe: `[[…]]`, `[…]`, `[tag]` groups survive
+    intact so tags like `[kanban, completions, review]` are not mangled).
+    """
+    if not s:
+        return ""
+    s = re.sub(r"\*\*([^*]+?)\*\*", r"\1", s)            # **bold**
+    s = re.sub(r"`([^`]+?)`", r"\1", s)                  # `code`
+    s = re.sub(r"(?<!\w)[*_]([^*_\s][^*_]*?)[*_](?!\w)", r"\1", s)  # *em* / _em_
+    s = re.sub(r"\*\*|\*|`", "", s)                      # stray emphasis markers
+    s = re.sub(r"^#{1,6}\s*", "", s)                     # leading heading marker
+    s = re.sub(r"^\s*>+\s?", "", s)                      # blockquote
+    s = re.sub(r"^\s*(\d+[.)]|[-*+])\s+", "", s)         # list markers
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _cut_line(s, limit):
@@ -460,7 +543,7 @@ def get_decision_item(path):
     return {
         "ok": True,
         "path": path,
-        "title": (fm.get("title") or path).strip(),
+        "title": _decision_title(fm, body, fm.get("title")),
         "ask": ctx["ask"],
         "why_now": ctx["why_now"],
         "source": ctx["source"],
